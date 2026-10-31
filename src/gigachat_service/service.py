@@ -23,12 +23,15 @@ class GigaChatInspectorService:
         self,
         credentials: Optional[str] = None,
         scope: Optional[str] = None,
-        model: str = "GigaChat:latest",
+        model: str = "GigaChat-2-Pro",
         verify_ssl_certs: bool = False,
     ):
-        self.credentials = credentials or os.getenv("GIGACHAT_CREDENTIALS")
+        if credentials is not None:
+            self.credentials = credentials
+        else:
+            self.credentials = os.getenv("GIGACHAT_CREDENTIALS")
         self.scope = scope or os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
-        self.model = model or os.getenv("GIGACHAT_MODEL", "GigaChat:latest")
+        self.model = model or os.getenv("GIGACHAT_MODEL", "GigaChat-2-Pro")
         self.verify_ssl_certs = verify_ssl_certs
         self._client = None
         self._is_online = False

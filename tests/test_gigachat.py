@@ -77,7 +77,7 @@ def test_build_inspector_prompt(sample_credit, sample_inspection):
 
 def test_offline_fallback_all_strategies(sample_credit, sample_inspection):
     """Verify offline fallback generates non-empty, strategy-specific legal text."""
-    service = GigaChatInspectorService(credentials=None)
+    service = GigaChatInspectorService(credentials="")
     assert service.is_online is False
 
     for strat in BankStrategy:
@@ -190,7 +190,7 @@ def test_cv_schemas_compatibility_with_gigachat():
         kalita_status="APPROVED_TRANCHE",
     )
 
-    service = GigaChatInspectorService(credentials=None)
+    service = GigaChatInspectorService(credentials="")
     summary = service.generate_summary_for_ui(cv_res, credit, decision)
 
     assert "5419163001521" in summary
@@ -200,3 +200,18 @@ def test_cv_schemas_compatibility_with_gigachat():
     status = service.get_mode_status()
     assert status["is_online"] is False
     assert "Оффлайн" in status["mode"]
+
+
+def test_live_gigachat_api_if_configured():
+    """Verify live API call if GIGACHAT_CREDENTIALS is configured in .env."""
+    import os
+    if not os.getenv("GIGACHAT_CREDENTIALS"):
+        pytest.skip("GIGACHAT_CREDENTIALS not set, skipping live API test")
+
+    service = GigaChatInspectorService()
+    if not service.is_online:
+        pytest.skip("Could not establish live connection to GigaChat API")
+
+    status = service.get_mode_status()
+    assert status["is_online"] is True
+    assert "Онлайн" in status["mode"]
