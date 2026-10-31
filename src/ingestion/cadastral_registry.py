@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 
 def normalize_cadastral_id(folder_or_cadastral: str) -> str:
@@ -51,13 +52,20 @@ class CadastralParcel:
     district_name: str = "Новосибирский район"
     notes: str = ""
     polygon: list[tuple[float, float]] = field(default_factory=list)
+    polygon_wgs84: list[tuple[float, float]] | None = None
+
+    def __post_init__(self):
+        if self.polygon_wgs84 and not self.polygon:
+            self.polygon = list(self.polygon_wgs84)
+        elif self.polygon and not self.polygon_wgs84:
+            self.polygon_wgs84 = list(self.polygon)
 
 
 class CadastralRegistry:
     """Cadastral registry service with official parcel data for Novosibirsk Oblast."""
 
     # Reference cadastral database for the 13 hackathon plots
-    _DATABASE: dict[str, CadastralParcel] = {
+    _DATABASE: ClassVar[dict[str, CadastralParcel]] = {
         "54:07:055001:178": CadastralParcel(
             cadastral_id="54:07:055001:178",
             raw_folder_name="5407055001178",
@@ -69,6 +77,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=420000.0,
             district_name="Тогучинский район",
+            polygon_wgs84=[
+                (54.81558854, 83.24030115),
+                (54.81574857, 83.24069780),
+                (54.81545146, 83.24105885),
+                (54.81529143, 83.24066220),
+            ],
         ),
         "54:19:130102:1231": CadastralParcel(
             cadastral_id="54:19:130102:1231",
@@ -81,6 +95,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=850000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (55.05681015, 83.14727308),
+                (55.05700132, 83.14699302),
+                (55.05720985, 83.14742692),
+                (55.05701868, 83.14770698),
+            ],
         ),
         "54:19:130102:1495": CadastralParcel(
             cadastral_id="54:19:130102:1495",
@@ -93,6 +113,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=790000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (55.05273294, 83.12767995),
+                (55.05288929, 83.12800523),
+                (55.05264706, 83.12836005),
+                (55.05249071, 83.12803477),
+            ],
         ),
         "54:19:160202:125": CadastralParcel(
             cadastral_id="54:19:160202:125",
@@ -105,6 +131,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=980000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.96194826, 83.23452868),
+                (54.96212398, 83.23489343),
+                (54.96185174, 83.23529132),
+                (54.96167602, 83.23492657),
+            ],
         ),
         "54:19:163001:521": CadastralParcel(
             cadastral_id="54:19:163001:521",
@@ -117,6 +149,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=650000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.81307717, 83.17781182),
+                (54.81326224, 83.17749065),
+                (54.81350283, 83.17790818),
+                (54.81331776, 83.17822935),
+            ],
         ),
         "54:19:163001:661": CadastralParcel(
             cadastral_id="54:19:163001:661",
@@ -129,6 +167,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=1150000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.81850396, 83.16287518),
+                (54.81870042, 83.16328155),
+                (54.81839604, 83.16372482),
+                (54.81819958, 83.16331845),
+            ],
         ),
         "54:19:164603:361": CadastralParcel(
             cadastral_id="54:19:164603:361",
@@ -141,6 +185,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=710000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.85116514, 83.19431429),
+                (54.85132951, 83.19465455),
+                (54.85107486, 83.19502571),
+                (54.85091049, 83.19468545),
+            ],
         ),
         "54:19:164603:3847": CadastralParcel(
             cadastral_id="54:19:164603:3847",
@@ -153,6 +203,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=890000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.84257023, 83.17796428),
+                (54.84275312, 83.17834281),
+                (54.84246977, 83.17875572),
+                (54.84228688, 83.17837719),
+            ],
         ),
         "54:19:165001:694": CadastralParcel(
             cadastral_id="54:19:165001:694",
@@ -165,6 +221,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=760000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.83816989, 83.23600562),
+                (54.83837868, 83.23564306),
+                (54.83865011, 83.23611438),
+                (54.83844132, 83.23647694),
+            ],
         ),
         "54:19:165001:729": CadastralParcel(
             cadastral_id="54:19:165001:729",
@@ -177,6 +239,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=740000.0,
             district_name="Новосибирский район",
+            polygon_wgs84=[
+                (54.83706925, 83.22974202),
+                (54.83724860, 83.23011315),
+                (54.83697075, 83.23051798),
+                (54.83679140, 83.23014685),
+            ],
         ),
         "54:32:010081:150": CadastralParcel(
             cadastral_id="54:32:010081:150",
@@ -189,6 +257,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=1200000.0,
             district_name="г. Бердск",
+            polygon_wgs84=[
+                (54.71627179, 83.11724177),
+                (54.71642397, 83.11755574),
+                (54.71618821, 83.11789823),
+                (54.71603603, 83.11758426),
+            ],
         ),
         "54:32:010870:8": CadastralParcel(
             cadastral_id="54:32:010870:8",
@@ -205,6 +279,12 @@ class CadastralRegistry:
                 "Внимание: ВРИ ИЖС не соответствует фактическому объекту (супермаркет). "
                 "Высокий риск нецелевого использования!"
             ),
+            polygon_wgs84=[
+                (54.80494911, 83.09625479),
+                (54.80516432, 83.09669979),
+                (54.80483089, 83.09718521),
+                (54.80461568, 83.09674021),
+            ],
         ),
         "54:35:121015:124": CadastralParcel(
             cadastral_id="54:35:121015:124",
@@ -217,6 +297,12 @@ class CadastralRegistry:
             is_residential_vri=True,
             cadastral_value_rub=1950000.0,
             district_name="г. Новосибирск",
+            polygon_wgs84=[
+                (54.80905849, 83.10022892),
+                (54.80921633, 83.09995505),
+                (54.80942151, 83.10031108),
+                (54.80926367, 83.10058495),
+            ],
         ),
     }
 
@@ -244,10 +330,13 @@ class CadastralRegistry:
                 norm_id = normalize_cadastral_id(cad_id)
                 poly_raw = record.get("polygon", [])
                 poly_tuples = [(float(pt[0]), float(pt[1])) for pt in poly_raw]
+                if len(poly_tuples) > 3 and poly_tuples[0] == poly_tuples[-1]:
+                    poly_tuples = poly_tuples[:-1]
 
                 if norm_id in cls._DATABASE:
                     p = cls._DATABASE[norm_id]
                     p.polygon = poly_tuples
+                    p.polygon_wgs84 = poly_tuples
                     if record.get("centroid_lat") and record.get("centroid_lon"):
                         p.centroid_lat = float(record["centroid_lat"])
                         p.centroid_lon = float(record["centroid_lon"])
