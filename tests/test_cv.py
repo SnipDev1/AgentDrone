@@ -1,0 +1,212 @@
+"""Unit tests for Computer Vision pipeline, readiness stages, material classifier, and anti-fraud."""
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+from src.cv.feature_extractor import FeatureExtractor, ImageFeatures
+from src.cv.fraud_detector import FraudDetector
+from src.cv.material_classifier import MaterialClassifier
+from src.cv.pipeline import CVPipeline
+from src.cv.readiness_classifier import ReadinessClassifier
+from src.models.schemas import CreditObject, StructuralElements, WallMaterial
+
+
+def test_feature_extractor_synthetic():
+    """Verify feature extraction on synthetic green vs structural image."""
+    # 1. Pure green vegetation image
+    green_img = np.zeros((720, 960, 3), dtype=np.uint8)
+    green_img[:, :] = (34, 139, 34)  # ForestGreen in BGR: (34, 139, 34)
+    feat_green = FeatureExtractor.extract_from_image(green_img, "green.jpg")
+    assert feat_green.vegetation_ratio > 0.85
+    assert not feat_green.has_large_structure
+
+    # 2. Structural image with a gray box (building) and lines
+    struct_img = np.zeros((720, 960, 3), dtype=np.uint8)
+    struct_img[:, :] = (34, 139, 34)  # Grass background
+    # Add building rectangle in center
+    cv2.rectangle(struct_img, (300, 200), (660, 520), (180, 180, 180), -1)  # Gray box
+    # Add dark windows
+    cv2.rectangle(struct_img, (340, 250), (420, 340), (20, 20, 20), -1)
+    cv2.rectangle(struct_img, (540, 250), (620, 340), (20, 20, 20), -1)
+
+    feat_struct = FeatureExtractor.extract_from_image(struct_img, "struct.jpg")
+    assert feat_struct.has_large_structure is True
+    assert feat_struct.structure_area_ratio > 0.10
+
+
+def test_readiness_classifier_stages():
+    """Verify mapping of visual features to 0%, 50%, and 100% stages."""
+    # Stage 0: Empty green parcel
+    empty_feat = ImageFeatures(
+        image_name="empty.jpg",
+        width=1000,
+        height=1000,
+        vegetation_ratio=0.95,
+        edge_density=0.01,
+        horizontal_lines_count=2,
+        vertical_lines_count=1,
+        structural_density=0.03,
+        dominant_hue=45.0,
+        mean_saturation=120.0,
+        color_shares={},
+        has_large_structure=False,
+        structure_area_ratio=0.01,
+        has_roof_contour=False,
+        window_openings_count=0,
+    )
+    pct_0, stage_0, title_0, elem_0 = ReadinessClassifier.evaluate([empty_feat])
+    assert stage_0 == 0
+    assert "0%" in title_0
+    assert pct_0 < 25.0
+    assert elem_0.has_walls is False
+    assert elem_0.has_roof is False
+
+    # Stage 50: Box / walls without roof
+    box_feat = ImageFeatures(
+        image_name="box.jpg",
+        width=1000,
+        height=1000,
+        vegetation_ratio=0.50,
+        edge_density=0.15,
+        horizontal_lines_count=35,
+        vertical_lines_count=25,
+        structural_density=0.60,
+        dominant_hue=25.0,
+        mean_saturation=60.0,
+        color_shares={"gray_block": 0.45},
+        has_large_structure=True,
+        structure_area_ratio=0.22,
+        has_roof_contour=False,
+        window_openings_count=0,
+    )
+    pct_50, stage_50, title_50, elem_50 = ReadinessClassifier.evaluate([box_feat])
+    assert stage_50 == 50
+    assert "50%" in title_50
+    assert 25.0 <= pct_50 < 85.0
+    assert elem_50.has_foundation is True
+    assert elem_50.has_walls is True
+    assert elem_50.has_roof is False
+
+    # Stage 100: Finished building with roof and windows
+    complete_feat = ImageFeatures(
+        image_name="complete.jpg",
+        width=1000,
+        height=1000,
+        vegetation_ratio=0.35,
+        edge_density=0.25,
+        horizontal_lines_count=50,
+        vertical_lines_count=40,
+        structural_density=0.90,
+        dominant_hue=10.0,
+        mean_saturation=70.0,
+        color_shares={"red_brick": 0.45},
+        has_large_structure=True,
+        structure_area_ratio=0.30,
+        has_roof_contour=True,
+        window_openings_count=6,
+    )
+    # 2 shots with roof contour
+    pct_100, stage_100, title_100, elem_100 = ReadinessClassifier.evaluate(
+        [complete_feat, complete_feat]
+    )
+    assert stage_100 == 100
+    assert "100%" in title_100
+    assert pct_100 >= 85.0
+    assert elem_100.has_foundation is True
+    assert elem_100.has_walls is True
+    assert elem_100.has_roof is True
+
+
+def test_material_classifier():
+    """Verify material classification based on color and structure shares."""
+    brick_feat = ImageFeatures(
+        image_name="brick.jpg",
+        width=1000,
+        height=1000,
+        vegetation_ratio=0.50,
+        edge_density=0.20,
+        horizontal_lines_count=30,
+        vertical_lines_count=30,
+        structural_density=0.60,
+        dominant_hue=8.0,
+        mean_saturation=120.0,
+        color_shares={
+            "red_brick": 0.40,
+            "gray_block": 0.05,
+            "wood_timber": 0.05,
+            "yellow_osb": 0.05,
+            "metal_panel": 0.0,
+        },
+        has_large_structure=True,
+        structure_area_ratio=0.25,
+        has_roof_contour=True,
+        window_openings_count=2,
+    )
+    mat, conf = MaterialClassifier.classify([brick_feat])
+    assert mat == WallMaterial.BRICK
+    assert conf >= 0.60
+
+
+def test_fraud_detector_material_mismatch():
+    """Verify Stop-Fraud trigger on material substitution."""
+    elem = StructuralElements(has_foundation=True, has_walls=True, has_roof=False)
+    fraud_flag, reasons, defects = FraudDetector.analyze_fraud_and_defects(
+        detected_material=WallMaterial.FRAME_PANEL,
+        material_confidence=0.85,
+        readiness_stage=50,
+        readiness_pct=50.0,
+        structural_elements=elem,
+        features_list=[],
+        declared_material="Кирпич",
+        loan_purpose="ИЖС",
+    )
+    assert fraud_flag is True
+    assert any("Stop-Fraud" in r or "несоответствие" in r.lower() for r in reasons)
+    assert any("консервация" in d.lower() for d in defects)
+
+
+def test_fraud_detector_berdsk_supermarket():
+    """Verify fraud detection for commercial supermarket on residential plot (Berdsk case)."""
+    elem = StructuralElements(has_foundation=True, has_walls=True, has_roof=True, has_windows_doors=True)
+    fraud_flag, reasons, defects = FraudDetector.analyze_fraud_and_defects(
+        detected_material=WallMaterial.SANDWICH_PANEL,
+        material_confidence=0.90,
+        readiness_stage=100,
+        readiness_pct=100.0,
+        structural_elements=elem,
+        features_list=[],
+        declared_material="Кирпич",
+        loan_purpose="ИЖС",
+        is_berdsk_case=True,
+    )
+    assert fraud_flag is True
+    assert any("супермаркет" in r.lower() or "нецелевое" in r.lower() for r in reasons)
+    assert any("ЛЭП" in d for d in defects)
+
+
+def test_cv_pipeline_real_dataset_sample():
+    """Verify end-to-end CV inspection on a real dataset sample."""
+    plot_dir = Path("dataset/24.09.20206/5419163001661")
+    if not plot_dir.exists():
+        pytest.skip("Dataset plot not available")
+
+    credit_obj = CreditObject(
+        cadastral_id="5419163001661",
+        borrower_name="Иванов Иван Иванович",
+        credit_agreement_number="КР-2026-ИЖС-0123",
+        credit_amount_rub=6500000.0,
+        planned_completion_date="2026-12-01",
+        declared_wall_material="Кирпич",
+    )
+
+    result = CVPipeline.analyze_plot("5419163001661", plot_dir=plot_dir, credit_object=credit_obj)
+    assert result.cadastral_id == "5419163001661"
+    assert result.analyzed_images_count == 6
+    assert 0.0 <= result.readiness_pct <= 100.0
+    assert result.readiness_stage in (0, 50, 100)
+    assert result.completeness.is_fully_compliant is True
+    assert result.geocheck.is_geofence_valid is True
+    assert len(result.shots_metadata) == 6
