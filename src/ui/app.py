@@ -187,8 +187,14 @@ def get_available_plot_ids() -> list[str]:
     return plots
 
 
-@st.cache_data(show_spinner=False)
-def analyze_single_plot(plot_id: str) -> tuple[CVInspectionResult, CreditObject, StrategyRecommendation]:
+CACHE_SALT = "v3_ppk_mrk_ms_live"
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def analyze_single_plot(
+    plot_id: str,
+    _cache_ver: str = CACHE_SALT,
+) -> tuple[CVInspectionResult, CreditObject, StrategyRecommendation]:
     """Execute end-to-end CV and Decision Engine pipeline with caching."""
     credit_obj = CreditRegistry.get_credit_object(plot_id)
     cv_result = CVPipeline.analyze_plot(
@@ -200,8 +206,11 @@ def analyze_single_plot(plot_id: str) -> tuple[CVInspectionResult, CreditObject,
     return cv_result, credit_obj, decision
 
 
-@st.cache_data(show_spinner=False)
-def analyze_portfolio_summary(plot_ids: tuple[str, ...]) -> list[dict]:
+@st.cache_data(show_spinner=False, ttl=60)
+def analyze_portfolio_summary(
+    plot_ids: tuple[str, ...],
+    _cache_ver: str = CACHE_SALT,
+) -> list[dict]:
     """Aggregate portfolio analysis for all monitored collateral assets."""
     summary = []
     for pid in plot_ids:
@@ -614,21 +623,45 @@ def main():
                                 use_container_width=True,
                             )
                             if meta:
+                                shot_val = getattr(meta.shot_angle, 'value', str(meta.shot_angle))
                                 cap_lines = [
-                                    f"Ракурс: **{meta.shot_angle.value}** | Высота: {meta.altitude_rel_m or 0:.1f}м | "
+                                    f"Ракурс: **{shot_val}** | Высота: {meta.altitude_rel_m or 0:.1f}м | "
                                     f"Pitch: {meta.gimbal_pitch_deg or 0:.1f}° | RTK: **{meta.rtk_status or 'RTK_FIX'}**"
                                 ]
-                                if meta.horizontal_accuracy_m is not None:
+                                h_acc = getattr(meta, 'horizontal_accuracy_m', None)
+
+                                if h_acc is not None:
+
+                                    std_lat = getattr(meta, 'std_lat_m', 0.0) or 0.0
+
+                                    std_lon = getattr(meta, 'std_lon_m', 0.0) or 0.0
+
+                                    std_hgt = getattr(meta, 'std_hgt_m', 0.0) or 0.0
+
                                     cap_lines.append(
-                                        f"🎯 **Метрология MRK:** СКО горизонтали **±{meta.horizontal_accuracy_m*100:.1f} см** "
-                                        f"(Lat: ±{(meta.std_lat_m or 0)*100:.1f} см, Lon: ±{(meta.std_lon_m or 0)*100:.1f} см, "
-                                        f"Hgt: ±{(meta.std_hgt_m or 0)*100:.1f} см)"
+
+                                        f"🎯 **Метрология MRK:** СКО горизонтали **±{h_acc*100:.1f} см** "
+
+                                        f"(Lat: ±{std_lat*100:.1f} см, Lon: ±{std_lon*100:.1f} см, "
+
+                                        f"Hgt: ±{std_hgt*100:.1f} см)"
+
                                     )
-                                if meta.antenna_offset_mm:
-                                    ant = meta.antenna_offset_mm
+
+                                ant = getattr(meta, 'antenna_offset_mm', None)
+
+                                if ant:
+
+                                    gps_time = getattr(meta, 'gps_time_sec', 0.0) or 0.0
+
+                                    gps_wk = getattr(meta, 'gps_week', 0) or 0
+
                                     cap_lines.append(
+
                                         f"📐 **Фазовый центр антенны:** N: {ant[0]:+.0f} мм, E: {ant[1]:+.0f} мм, V: {ant[2]:+.0f} мм | "
-                                        f"GPS-время: {meta.gps_time_sec or 0:.2f}с (неделя {meta.gps_week or 0})"
+
+                                        f"GPS-время: {gps_time:.2f}с (неделя {gps_wk})"
+
                                     )
                                 st.caption("  \n".join(cap_lines))
                         except Exception as e:
@@ -644,8 +677,8 @@ def main():
 
         with c_ppk:
             st.subheader("🛰️ Геодезический аудит PPK / RINEX 3.05")
-            ppk = cv_result.ppk_summary
-            if ppk and ppk.has_ppk:
+            ppk = getattr(cv_result, 'ppk_summary', None)
+            if ppk and getattr(ppk, 'has_ppk', False):
                 st.success(
                     f"✅ **Сырые спутниковые наблюдения GNSS подтверждены** (`{ppk.obs_filename}`)"
                 )
@@ -667,8 +700,10 @@ def main():
                 st.info("ℹ️ По данному объекту геодезическая привязка выполнена по бортовому RTK логу (MRK).")
 
         with c_extra:
-            ms = cv_result.multispectral
-            if ms and ms.has_multispectral:
+            ms = getattr(cv_result, 'multispectral', None)
+
+            notes = getattr(cv_result, 'operator_notes', [])
+            if ms and getattr(ms, 'has_multispectral', False):
                 st.subheader("🌿 Спектрометрический анализ DJI M3M (NDVI)")
                 st.write(f"**Статус территории:** {ms.site_activity_status}")
                 m_c1, m_c2, m_c3 = st.columns(3)
@@ -689,9 +724,9 @@ def main():
                     f"Спектральные диапазоны: {', '.join(ms.bands_available[:2])} • "
                     f"Риск зарастания бурьяном: **{ms.weed_overgrowth_risk}**"
                 )
-            elif cv_result.operator_notes:
+            elif notes:
                 st.subheader("📋 Полевой журнал пилота БПЛА")
-                for note in cv_result.operator_notes:
+                for note in notes:
                     st.warning(f"📝 **Бортовая заметка:** {note}")
                 st.caption("Данные из бортовых текстовых заметок автоматически переданы в алгоритмы детекции рисков.")
             else:
