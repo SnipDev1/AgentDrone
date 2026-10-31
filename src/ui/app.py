@@ -23,6 +23,7 @@ from PIL import Image
 import streamlit as st
 import streamlit.components.v1 as components
 
+from src.cv.boundary_overlay import BoundaryOverlay
 from src.cv.pipeline import CVPipeline
 from src.dataset import DroneDataset
 from src.engine.decision_engine import DecisionEngine
@@ -221,6 +222,7 @@ def analyze_portfolio_summary(plot_ids: tuple[str, ...]) -> list[dict]:
                 "fraud_flag": cv_res.fraud_risk_flag,
                 "lat": parcel.centroid_lat if parcel else 55.0,
                 "lon": parcel.centroid_lon if parcel else 83.0,
+                "polygon": BoundaryOverlay.calculate_ground_polygon(parcel) if parcel else [],
                 "kalita_status": dec.kalita_status,
                 "days_overdue": credit.days_overdue,
             })
@@ -558,6 +560,21 @@ def main():
 
         with col_photos:
             st.subheader("📷 Ракурсы съемки БПЛА")
+
+            c_chk, c_opt = st.columns([3, 2])
+            with c_chk:
+                show_boundary = st.checkbox(
+                    "🔴 Граница участка (красная линия)",
+                    value=True,
+                    help="Проекция кадастровой границы Росреестра на плоскость снимка с учетом RTK телеметрии",
+                )
+            with c_opt:
+                boundary_thickness = st.select_slider(
+                    "Толщина линии:",
+                    options=[2, 4, 6, 8],
+                    value=4,
+                )
+
             dataset = DroneDataset()
             images = []
             try:
@@ -573,8 +590,28 @@ def main():
                         img_path = images[idx]
                         try:
                             pil_img = Image.open(img_path)
-                            st.image(pil_img, caption=f"{img_path.name}", use_container_width=True)
                             meta = cv_result.shots_metadata[idx] if idx < len(cv_result.shots_metadata) else None
+
+                            if show_boundary and parcel is not None:
+                                display_img = BoundaryOverlay.apply_boundary_overlay(
+                                    image=pil_img,
+                                    meta=meta,
+                                    parcel=parcel,
+                                    line_color=(255, 30, 30),
+                                    line_width=boundary_thickness,
+                                    fill_opacity=0.15,
+                                    show_badge=True,
+                                )
+                                caption_prefix = "🔴 Кадастровая граница ЗУ: "
+                            else:
+                                display_img = pil_img
+                                caption_prefix = ""
+
+                            st.image(
+                                display_img,
+                                caption=f"{caption_prefix}{img_path.name}",
+                                use_container_width=True,
+                            )
                             if meta:
                                 st.caption(
                                     f"Ракурс: **{meta.shot_angle.value}** | Высота: {meta.altitude_rel_m or 0:.1f}м | "
@@ -636,12 +673,24 @@ def main():
                         fillOpacity: 0.85
                     }}).addTo(map);
 
-                    // Cadastral Buffer Zone (~65m)
+                    // Official Cadastral Boundary Polygon (Красные линии ЗУ)
+                    if (item.polygon && item.polygon.length === 4) {{
+                        var poly = L.polygon(item.polygon, {{
+                            color: "#dc2626",
+                            fillColor: color,
+                            fillOpacity: 0.22,
+                            weight: 2,
+                            dashArray: "4, 4"
+                        }}).addTo(map);
+                        poly.bindPopup(popupContent);
+                    }}
+
+                    // Cadastral Buffer Zone (~50m)
                     L.circle([item.lat, item.lon], {{
-                        radius: 65,
+                        radius: 50,
                         color: color,
                         fillColor: color,
-                        fillOpacity: 0.15,
+                        fillOpacity: 0.08,
                         weight: 1
                     }}).addTo(map);
 

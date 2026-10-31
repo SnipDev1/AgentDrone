@@ -210,3 +210,48 @@ def test_cv_pipeline_real_dataset_sample():
     assert result.completeness.is_fully_compliant is True
     assert result.geocheck.is_geofence_valid is True
     assert len(result.shots_metadata) == 6
+
+
+def test_boundary_overlay():
+    """Verify cadastral boundary calculation and visual red line rendering."""
+    from PIL import Image
+    from src.cv.boundary_overlay import BoundaryOverlay
+    from src.ingestion.cadastral_registry import CadastralParcel
+    from src.models.schemas import DroneImageMeta
+
+    parcel = CadastralParcel(
+        cadastral_id="54:19:130102:1231",
+        raw_folder_name="54191301021231",
+        address="Новосибирская обл., п. Приобский",
+        centroid_lat=55.057010,
+        centroid_lon=83.147350,
+        area_sqm=1000.0,
+        permitted_use="Для ИЖС",
+    )
+
+    # 1. Ground polygon test
+    corners = BoundaryOverlay.calculate_ground_polygon(parcel)
+    assert len(corners) == 4
+    for lat, lon in corners:
+        assert 54.0 < lat < 56.0
+        assert 82.0 < lon < 84.0
+
+    # 2. Camera projection test (Nadir 50m)
+    meta = DroneImageMeta(
+        filename="DJI_0001.JPG",
+        file_path="mock/path.jpg",
+        latitude=55.057018,
+        longitude=83.147330,
+        altitude_rel_m=50.0,
+        gimbal_pitch_deg=-90.0,
+        gimbal_yaw_deg=-129.0,
+    )
+
+    img = Image.new("RGB", (960, 720), color=(100, 160, 100))
+    poly_pts = BoundaryOverlay.get_projected_polygon(meta, parcel, img_w=960, img_h=720)
+    assert len(poly_pts) == 4
+
+    # 3. Visual overlay test
+    overlaid = BoundaryOverlay.apply_boundary_overlay(img, meta, parcel)
+    assert overlaid.size == (960, 720)
+    assert overlaid.mode == "RGB"
