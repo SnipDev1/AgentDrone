@@ -45,6 +45,7 @@
   * Реализована фирменная дизайн-система Сбера (Plasma / `sberbank.ru/ru/person`): официальные шрифты `SBSansText` и `SBSansDisplay`, цветовая схема `#21A038`, SVG логотип Сбера, KPI-виджеты и карточки решений.
   * Разведена инфраструктура маршрутизации для двух параллельных веток: `/sber` (основной портал с дизайном Сбера, порт 8501) и `/dev` (ветка разработчиков, порт 8502) через Caddy reverse proxy и отдельные systemd сервисы.
   * Написаны модули `src/ui/sber_theme.py`, `tests/test_sber_theme.py`, конфигурации `deploy/Caddyfile`, `deploy/agentdrone-sber.service`, `deploy/agentdrone-dev.service`, `deploy/setup_routing.sh`.
+  * Успешно задеплоено на боевой сервер `http://89.189.177.216/`: оба сервиса (`agentdrone-sber` и `agentdrone-dev`) активны, веб-сокеты и страницы отдают 200 OK. Корень автоматически перенаправляет на `/sber/`.
 
 ---
 
