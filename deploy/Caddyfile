@@ -1,21 +1,74 @@
-# Caddy reverse proxy configuration for AgentDrone
-# Routing for http://89.189.177.216:
-# - /sber -> Sber Design UI (Role #3) on port 8501
-# - /dev  -> Developer UI on port 8502
+http://dmitry.dprits.ru {
+    redir https://dmitry.dprits.ru:8443{uri} permanent
+}
 
-:80 {
-    # Сбер дизайн (ветка sber)
+dmitry.dprits.ru {
+    reverse_proxy 127.0.0.1:8088
+}
+
+http://openfamily.dmitry.dprits.ru {
+    redir https://openfamily.dmitry.dprits.ru:8443{uri} permanent
+}
+
+openfamily.dmitry.dprits.ru {
+    reverse_proxy 127.0.0.1:8085
+}
+
+http://sibkod.dmitry.dprits.ru {
+    redir https://sibkod.dmitry.dprits.ru:8443{uri} permanent
+}
+
+sibkod.dmitry.dprits.ru {
+    encode gzip zstd
+
+    @root path /
+    redir @root /sber/ 302
+
     handle /sber* {
         reverse_proxy 127.0.0.1:8501
     }
 
-    # Ветка разработчиков (ветка dev)
     handle /dev* {
         reverse_proxy 127.0.0.1:8502
     }
 
-    # Редирект с корня на /sber
-    handle {
-        redir / /sber 302
+    handle_errors {
+        respond "AgentDrone Service is starting up or offline." 502
+    }
+}
+
+http://89.189.177.216 {
+    encode gzip zstd
+
+    @root path /
+    redir @root /sber/ 302
+
+    handle_path /factory* {
+        root * /var/www/factory
+        file_server
+        try_files {path} /index.html
+    }
+    @factory_assets {
+        path /assets/*
+    }
+    handle @factory_assets {
+        root * /var/www/factory
+        file_server
+    }
+
+    handle /sber* {
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    handle /dev* {
+        reverse_proxy 127.0.0.1:8502
+    }
+
+    handle /drone* {
+        redir /sber/ 302
+    }
+
+    handle_errors {
+        respond "AgentDrone Service is starting up or offline on 127.0.0.1:8501 / 8502." 502
     }
 }

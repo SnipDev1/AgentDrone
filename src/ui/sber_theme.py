@@ -86,7 +86,7 @@ def get_sber_css() -> str:
     return """
     <link rel="stylesheet" href="https://cdn-app.sberdevices.ru/shared-static/0.0.0/styles/SBSansText.0.2.0.css" />
     <link rel="stylesheet" href="https://cdn-app.sberdevices.ru/shared-static/0.0.0/styles/SBSansDisplay.0.2.0.css" />
-
+    
     <style>
     /* ==========================================================================
        1. Глобальная дизайн-система Сбера (Plasma Tokens)
@@ -94,19 +94,19 @@ def get_sber_css() -> str:
     :root {
         --sber-font-text: 'SB Sans Text', 'SBSansText', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         --sber-font-display: 'SB Sans Display', 'SBSansDisplay', 'SB Sans Text', sans-serif;
-
+        
         --sber-green: #21A038;
         --sber-green-hover: #1FA338;
         --sber-green-dark: #0E7425;
         --sber-green-light: #EBF8EE;
         --sber-green-gradient: linear-gradient(108deg, #0e8528 0%, #21a038 52%, #18d24e 100%);
         --sber-emerald-gradient: linear-gradient(135deg, #083318 0%, #0d5423 50%, #177a33 100%);
-
+        
         --sber-bg: #F4F6F9;
         --sber-surface: #FFFFFF;
         --sber-card-shadow: 0 4px 24px rgba(0, 0, 0, 0.05);
         --sber-card-shadow-hover: 0 8px 32px rgba(33, 160, 56, 0.12);
-
+        
         --sber-text-primary: #121922;
         --sber-text-secondary: #687182;
         --sber-text-muted: #8E98A8;
@@ -436,7 +436,7 @@ def get_sber_css() -> str:
         align-items: center;
         gap: 6px;
     }
-
+    
     /* Контейнер карточек */
     .sber-white-card {
         background: #FFFFFF;
@@ -446,7 +446,7 @@ def get_sber_css() -> str:
         box-shadow: var(--sber-card-shadow);
         margin-bottom: 20px;
     }
-
+    
     /* Сбер Таблицы */
     .sber-table-v2 {
         width: 100%;
@@ -482,8 +482,14 @@ def get_sber_css() -> str:
     """
 
 
-def render_sber_header(active_objects_count: int = 13, rtk_status: str = "FIX Q=16") -> str:
+def render_sber_header(
+    active_objects_count: int = 13,
+    rtk_status: str = "FIX Q=16",
+    giga_status: str = "GigaChat-2-Pro",
+    giga_online: bool = False,
+) -> str:
     """Генерирует HTML-шапку в фирменном стиле sberbank.ru."""
+    giga_bg = "background:#EAF8ED; color:#0E7425; border: 1px solid rgba(33, 160, 56, 0.25);" if giga_online else "background:#FEF9C3; color:#854D0E; border: 1px solid rgba(234, 179, 8, 0.25);"
     return f"""
     <div class="sber-top-navbar">
         <div class="sber-brand-group">
@@ -499,6 +505,9 @@ def render_sber_header(active_objects_count: int = 13, rtk_status: str = "FIX Q=
                 <span class="sber-pulse-dot"></span>
                 <span>DJI RTK {rtk_status}</span>
             </div>
+            <div class="sber-pill-status" style="{giga_bg}">
+                <span>🤖 {giga_status}</span>
+            </div>
             <div class="sber-pill-status">
                 <span>⚡ АС «Калита» Онлайн</span>
             </div>
@@ -510,12 +519,36 @@ def render_sber_header(active_objects_count: int = 13, rtk_status: str = "FIX Q=
     """
 
 
+def render_gigachat_card(summary_text: str, is_online: bool = False, model_name: str = "GigaChat-2-Pro") -> str:
+    """Генерирует карточку AI-заключения GigaChat в корпоративном стиле Сбера."""
+    status_label = f"🟢 GigaChat API ({model_name})" if is_online else "🟡 Автономный шаблонизатор"
+    status_badge_class = "sber-badge-green" if is_online else "sber-badge-yellow"
+    return f"""
+    <div class="sber-white-card" style="border-left: 6px solid var(--sber-green); margin: 16px 0 20px 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="font-family: var(--sber-font-display); font-size: 16px; color: var(--sber-text-primary);">
+                    Экспертное заключение ИИ-инспектора GigaChat для АС «Калита»
+                </strong>
+            </div>
+            <span class="{status_badge_class}">
+                {status_label}
+            </span>
+        </div>
+        <div style="font-size: 14px; line-height: 1.6; color: #1F2937; white-space: pre-line; background: #F8FAFC; padding: 16px; border-radius: 12px; border: 1px solid #E2E8F0;">
+{summary_text}
+        </div>
+    </div>
+    """
+
+
 def render_kpi_card(title: str, value: str, subtext: str, icon_type: str = "drone", is_alert: bool = False, is_success: bool = False) -> str:
     """Генерирует виджет карточки KPI в стиле СберБанк Онлайн."""
     icon_svg = SVG_ICONS.get(icon_type, SVG_ICONS["drone"])
     sub_color = "#15803D" if is_success else ("#B91C1C" if is_alert else "#687182")
     icon_bg = "#FEE2E2" if is_alert else ("#EAF8ED" if is_success else "#F4F6F9")
-
+    
     return f"""
     <div class="sber-kpi-card">
         <div class="sber-kpi-top">
