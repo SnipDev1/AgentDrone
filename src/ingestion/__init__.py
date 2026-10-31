@@ -12,6 +12,8 @@ from .cadastral_validator import (
     project_camera_aim_ground,
 )
 from .credit_registry import CreditRegistry
+from .notes_parser import NotesParser
+from .ppk_parser import PPKParser
 from .telemetry_parser import MRKRecord, TelemetryParser
 
 __all__ = [
@@ -21,6 +23,8 @@ __all__ = [
     "CadastralValidator",
     "CreditRegistry",
     "MRKRecord",
+    "NotesParser",
+    "PPKParser",
     "TelemetryParser",
     "haversine_distance_m",
     "normalize_cadastral_id",

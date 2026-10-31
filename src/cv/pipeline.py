@@ -13,6 +13,8 @@ from pathlib import Path
 from ..config import find_dataset_root
 from ..ingestion.angle_detector import AngleCompletenessDetector
 from ..ingestion.cadastral_validator import CadastralValidator
+from ..ingestion.notes_parser import NotesParser
+from ..ingestion.ppk_parser import PPKParser
 from ..ingestion.telemetry_parser import TelemetryParser
 from ..models.schemas import (
     CreditObject,
@@ -24,6 +26,7 @@ from ..models.schemas import (
 from .feature_extractor import FeatureExtractor, ImageFeatures
 from .fraud_detector import FraudDetector
 from .material_classifier import MaterialClassifier
+from .multispectral import MultispectralAnalyzer
 from .readiness_classifier import ReadinessClassifier
 
 
@@ -125,7 +128,22 @@ class CVPipeline:
                 f"от заявленного участка (риск подлога/съемки чужого объекта)."
             )
 
-        # 8. Preliminary recommendation hint
+        # 8. PPK Geodetic Telemetry, Multispectral, and Operator Notes Ingestion
+        ppk_summary = PPKParser.parse_plot_ppk(resolved_dir)
+        multispectral = MultispectralAnalyzer.analyze_plot(resolved_dir)
+        operator_notes = NotesParser.parse_plot_notes(resolved_dir)
+        note_frauds, note_defects = NotesParser.detect_note_hazards(operator_notes)
+
+        for nf in note_frauds:
+            if nf not in fraud_reasons:
+                fraud_reasons.append(nf)
+                fraud_flag = True
+
+        for nd in note_defects:
+            if nd not in defects:
+                defects.append(nd)
+
+        # 9. Preliminary recommendation hint
         if fraud_flag:
             rec_hint = (
                 "СТОП-ФРОД: Передать материалы в Службу безопасности Банка для аудита и реагирования."
@@ -159,4 +177,7 @@ class CVPipeline:
             recommendation_hint=rec_hint,
             analyzed_images_count=len(drone_jpgs),
             shots_metadata=shots_meta,
+            ppk_summary=ppk_summary,
+            multispectral=multispectral,
+            operator_notes=operator_notes,
         )

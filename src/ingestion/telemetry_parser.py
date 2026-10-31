@@ -6,6 +6,7 @@ relative and absolute altitudes, timestamps, and matches with Timestamp.MRK logs
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,14 @@ class TelemetryParser:
         seq_match = re.search(r"_(\d{4})_D\.", path.name, re.IGNORECASE)
         shutter_idx = int(seq_match.group(1)) if seq_match else None
 
+        std_lat = None
+        std_lon = None
+        std_hgt = None
+        h_acc = None
+        gps_week = None
+        gps_time_sec = None
+        ant_offset = None
+
         # Cross-reference with MRK log if available
         if mrk_records and shutter_idx and shutter_idx in mrk_records:
             mrk = mrk_records[shutter_idx]
@@ -211,7 +220,14 @@ class TelemetryParser:
             lon = mrk.longitude
             alt_abs = mrk.ellipsoidal_height_m
             rtk_flag = mrk.q_flag
-            rtk_status = "RTK_FIX" if mrk.q_flag == 16 else f"Q_{mrk.q_flag}"
+            rtk_status = "RTK_FIX" if mrk.q_flag in (1, 16) else f"Q_{mrk.q_flag}"
+            std_lat = mrk.std_lat_m
+            std_lon = mrk.std_lon_m
+            std_hgt = mrk.std_hgt_m
+            h_acc = math.hypot(mrk.std_lat_m, mrk.std_lon_m)
+            gps_week = mrk.gps_week
+            gps_time_sec = mrk.gps_time_sec
+            ant_offset = (mrk.offset_north_mm, mrk.offset_east_mm, mrk.offset_vert_mm)
         else:
             rtk_status = rtk_status_str or ("RTK" if rtk_flag == 16 else "STANDARD_GPS")
 
@@ -246,4 +262,11 @@ class TelemetryParser:
             shutter_index=shutter_idx,
             drone_model=drone_model or "DJI M3M",
             is_dji=bool(xmp_text or "DJI" in path.name),
+            std_lat_m=std_lat,
+            std_lon_m=std_lon,
+            std_hgt_m=std_hgt,
+            horizontal_accuracy_m=round(h_acc, 3) if h_acc is not None else None,
+            gps_week=gps_week,
+            gps_time_sec=gps_time_sec,
+            antenna_offset_mm=ant_offset,
         )
