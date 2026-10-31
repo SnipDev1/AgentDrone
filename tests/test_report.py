@@ -151,3 +151,70 @@ def test_act_generator_save_html(sample_credit, sample_inspection, tmp_path):
 
     assert saved_path.exists()
     assert saved_path.stat().st_size > 1000
+
+
+def test_build_act_from_cv_schemas():
+    """Verify build_act_from_cv integrates CV schemas and renders official HTML Act."""
+    from src.models.schemas import (
+        CVInspectionResult,
+        CadastralGeoCheck,
+        CreditObject as CVCreditObject,
+        StrategyRecommendation as CVStrategyRecommendation,
+        StrategyType,
+        StructuralElements,
+        WallMaterial as CVWallMaterial,
+    )
+    from src.report import build_act_from_cv, ActGenerator
+
+    cv_res = CVInspectionResult(
+        cadastral_id="5407055001178",
+        readiness_pct=60.0,
+        readiness_stage=50,
+        stage_title="Коробка здания",
+        structural_elements=StructuralElements(has_foundation=True, has_walls=True),
+        detected_material=CVWallMaterial.BRICK,
+        geocheck=CadastralGeoCheck(
+            cadastral_id="5407055001178",
+            drone_center_lat=55.302,
+            drone_center_lon=82.742,
+            is_correct_plot=True,
+        ),
+        fraud_risk_flag=False,
+    )
+
+    credit = CVCreditObject(
+        cadastral_id="5407055001178",
+        borrower_name="Сидоров Андрей Владимирович",
+        credit_agreement_number="CR-SIB-2026-001",
+        credit_amount_rub=6200000.0,
+        planned_completion_date="2027-04-30",
+        declared_wall_material="Кирпич",
+        days_overdue=0,
+    )
+
+    decision = CVStrategyRecommendation(
+        strategy=StrategyType.APPROVE_TRANCHE,
+        strategy_code="STRAT-01",
+        title="Выдача очередного транша",
+        risk_level="LOW",
+        action_required="Выдать транш №2",
+        reasoning=["Стройка в графике"],
+        financial_impact_rub=2000000.0,
+        kalita_status="APPROVED_TRANCHE",
+    )
+
+    act_data = build_act_from_cv(
+        cv_result=cv_res,
+        credit_obj=credit,
+        decision=decision,
+        gigachat_summary="Экспертное заключение от GigaChat.",
+    )
+
+    assert "1178" in act_data.act_number
+    assert act_data.credit.borrower_name == "Сидоров Андрей Владимирович"
+    assert act_data.recommendation.summary == "Экспертное заключение от GigaChat."
+
+    gen = ActGenerator()
+    html = gen.render_html(act_data)
+    assert "АКТ ПРОВЕРКИ ИМУЩЕСТВА" in html
+    assert "Экспертное заключение от GigaChat." in html

@@ -29,6 +29,9 @@ from src.engine.decision_engine import DecisionEngine
 from src.ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
 from src.ingestion.credit_registry import CreditRegistry
 from src.models.schemas import CreditObject, CVInspectionResult, StrategyRecommendation
+from src.gigachat_service import GigaChatInspectorService, build_inspector_prompt
+from src.models.strategy import ReportPhotoItem
+from src.report import ActGenerator, build_act_from_cv
 
 # Page configuration
 st.set_page_config(
@@ -362,8 +365,33 @@ def main():
         - **Кадастр:** Росреестр НСО (Центроиды, ВРИ)
         - **Интеграция:** АС «Калита» (Шлюз активен)
         - **AI Ядро:** OpenCV + Heuristic Risk Matrix
+        - **LLM / GenAI:** GigaChat API (Сбер)
         """
     )
+
+    # GigaChat service initialization
+    giga_service = GigaChatInspectorService()
+    giga_status = giga_service.get_mode_status()
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🤖 Sber GigaChat API")
+    if giga_status["is_online"]:
+        st.sidebar.success(f"🟢 {giga_status['mode']}\nМодель: {giga_status['model']}")
+    else:
+        st.sidebar.info(f"🟡 {giga_status['mode']}\nАвтономный экспертный шаблонизатор")
+
+    with st.sidebar.expander("⚙️ Настройки GigaChat API"):
+        giga_key_input = st.text_input(
+            "Authorization Key (Base64 ClientID:Secret):",
+            type="password",
+            key="giga_custom_token",
+            help="Введите токен Сбер ID для прямого инференса GigaChat",
+        )
+        if giga_key_input:
+            if giga_service.set_credentials(giga_key_input):
+                st.success("✅ GigaChat API успешно подключен!")
+            else:
+                st.warning("⚠️ Ошибка авторизации. Работает Fallback-режим.")
 
     # Main Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -513,6 +541,45 @@ def main():
                 st.info("Акт проверки залога (Приложение 1) сгенерирован и доступен на вкладке «Акт проверки залога».")
         with col_act3:
             st.caption("ℹ️ Все транзакции заверяются усиленной квалифицированной ЭЦП инспектора залогов.")
+
+        # GigaChat AI Inspector Summary Card
+        st.write("")
+        st.subheader("🤖 Экспертное AI-заключение GigaChat (Сбер) для АС «Калита»")
+
+        giga_key = f"giga_summary_{selected_raw_id}"
+        if giga_key not in st.session_state:
+            st.session_state[giga_key] = giga_service.generate_summary_for_ui(cv_result, credit_obj, decision)
+
+        col_g1, col_g2 = st.columns([3, 1])
+        with col_g2:
+            if st.button("⚡ Обновить через GigaChat", key=f"btn_regen_{selected_raw_id}", use_container_width=True):
+                with st.spinner("Запрос к модели GigaChat Сбера..."):
+                    st.session_state[giga_key] = giga_service.generate_summary_for_ui(cv_result, credit_obj, decision)
+                st.success("Резюме обновлено!")
+
+        current_summary = st.session_state[giga_key]
+        status_info = giga_service.get_mode_status()
+        status_badge = "🟢 GigaChat API (Сбер)" if status_info["is_online"] else "🟡 Оффлайн-шаблонизатор (Fallback)"
+
+        st.markdown(
+            f"""
+            <div style="background:#f0fdf4; border-left:5px solid #21a038; border-radius:6px; padding:14px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <strong style="color:#15803d; font-size:14px;">Заключение инспектора залоговой службы:</strong>
+                    <span style="font-size:12px; background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:12px; font-weight:600;">
+                        {status_badge}
+                    </span>
+                </div>
+                <div style="font-size:13.5px; line-height:1.5; color:#1f2937; white-space:pre-line;">
+                    {current_summary}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("🔍 Посмотреть структурированный JSON-промпт для GigaChat"):
+            st.code(build_inspector_prompt(credit_obj, cv_result, decision), language="json")
 
         st.markdown("---")
 
@@ -781,78 +848,35 @@ def main():
         st.subheader("📑 Официальный Акт проверки залога недвижимости (Приложение 1)")
         st.caption("Форма утверждена Регламентом залогового мониторинга Сибирского банка ПАО Сбербанк.")
 
-        act_html = f"""
-        <div style="background:white; color:#111; padding:30px; border:1px solid #ccc; font-family:'Times New Roman', serif; line-height:1.4;">
-            <div style="text-align:right; font-size:12px;">Приложение № 1<br/>к Регламенту мониторинга залогов ИЖС<br/>ПАО Сбербанк (АС «Калита»)</div>
-            <h3 style="text-align:center; margin-top:15px; margin-bottom:5px;">АКТ ПРОВЕРКИ ПРЕДМЕТА ЗАЛОГА № АЗ-{selected_raw_id[-6:]}</h3>
-            <p style="text-align:center; font-size:13px; margin-bottom:20px;">г. Новосибирск • {datetime.now().strftime('%d.%m.%Y')}</p>
+        dataset_inst = DroneDataset()
+        plot_photos: list[ReportPhotoItem] = []
+        if dataset_inst.is_available():
+            try:
+                plot_data = dataset_inst.get_plot(selected_raw_id)
+                for idx, p_img in enumerate(plot_data.rgb_images[:6]):
+                    plot_photos.append(
+                        ReportPhotoItem(
+                            file_path=str(p_img),
+                            caption=f"Кадр {idx+1}: {p_img.name} (фасад/надир)",
+                            is_key_view=idx < 2,
+                        )
+                    )
+            except Exception:
+                pass
 
-            <table style="width:100%; border-collapse:collapse; font-size:13px; margin-bottom:15px;">
-                <tr><td style="border:1px solid #333; padding:6px; width:35%;"><b>Залогодатель / Заемщик:</b></td><td style="border:1px solid #333; padding:6px;">{credit_obj.borrower_name}</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Кредитный договор:</b></td><td style="border:1px solid #333; padding:6px;">№ {credit_obj.credit_agreement_number}</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Кадастровый номер ЗУ:</b></td><td style="border:1px solid #333; padding:6px;">{cv_result.cadastral_id}</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Адрес местоположения:</b></td><td style="border:1px solid #333; padding:6px;">{parcel.address if parcel else credit_obj.address}</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Метод осмотра:</b></td><td style="border:1px solid #333; padding:6px;">Автоматизированный мониторинг БПЛА DJI с RTK-геопривязкой и CV-анализом</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Фактическая готовность:</b></td><td style="border:1px solid #333; padding:6px;"><b>{cv_result.readiness_pct:.1f}%</b> (Банковская стадия {cv_result.readiness_stage}%)</td></tr>
-                <tr><td style="border:1px solid #333; padding:6px;"><b>Материал стен (факт / план):</b></td><td style="border:1px solid #333; padding:6px;">{cv_result.detected_material.value} / {credit_obj.declared_wall_material}</td></tr>
-            </table>
+        current_giga = st.session_state.get(f"giga_summary_{selected_raw_id}")
+        act_data = build_act_from_cv(
+            cv_result=cv_result,
+            credit_obj=credit_obj,
+            decision=decision,
+            gigachat_summary=current_giga,
+            photos=plot_photos,
+        )
+        act_generator = ActGenerator()
+        act_html = act_generator.render_html(act_data)
 
-            <h4 style="margin:10px 0 5px 0; font-size:13px;">1. Результаты проверки конструктивных элементов:</h4>
-            <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:15px;">
-                <tr style="background:#eee;">
-                    <th style="border:1px solid #333; padding:5px;">Элемент</th>
-                    <th style="border:1px solid #333; padding:5px;">Вес банка</th>
-                    <th style="border:1px solid #333; padding:5px;">Наличие</th>
-                    <th style="border:1px solid #333; padding:5px;">Уверенность CV</th>
-                </tr>
-                <tr>
-                    <td style="border:1px solid #333; padding:5px;">Фундамент</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">15%</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{'Имеется' if cv_result.structural_elements.has_foundation else 'Отсутствует'}</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{cv_result.structural_elements.foundation_confidence*100:.1f}%</td>
-                </tr>
-                <tr>
-                    <td style="border:1px solid #333; padding:5px;">Несущие стены</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">40%</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{'Имеется' if cv_result.structural_elements.has_walls else 'Отсутствует'}</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{cv_result.structural_elements.walls_confidence*100:.1f}%</td>
-                </tr>
-                <tr>
-                    <td style="border:1px solid #333; padding:5px;">Кровельная система</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">30%</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{'Имеется' if cv_result.structural_elements.has_roof else 'Отсутствует'}</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{cv_result.structural_elements.roof_confidence*100:.1f}%</td>
-                </tr>
-                <tr>
-                    <td style="border:1px solid #333; padding:5px;">Контур / Окна / Двери</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">15%</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{'Имеется' if cv_result.structural_elements.has_windows_doors else 'Отсутствует'}</td>
-                    <td style="border:1px solid #333; padding:5px; text-align:center;">{cv_result.structural_elements.windows_doors_confidence*100:.1f}%</td>
-                </tr>
-            </table>
-
-            <h4 style="margin:10px 0 5px 0; font-size:13px;">2. Заключение Банковского Decision Engine:</h4>
-            <p style="font-size:13px; margin:0 0 10px 0;">
-                <b>Рекомендованная стратегия:</b> {decision.strategy_code} — {decision.strategy.value}<br/>
-                <b>Предписываемое действие:</b> {decision.action_required}<br/>
-                <b>Статус в АС «Калита»:</b> {decision.kalita_status}
-            </p>
-
-            <div style="margin-top:25px; display:flex; justify-content:space-between; font-size:12px;">
-                <div>
-                    <b>Инспектор залоговой службы:</b><br/>
-                    ИИ-агент AgentDrone (v1.0-Hackathon)<br/>
-                    ЭЦП: <code>SHA256: 4F9B...C82A (Действительна)</code>
-                </div>
-                <div>
-                    <b>Куратор кредитного отдела:</b><br/>
-                    _________________ / Смирнова В.А. /<br/>
-                    Дата акцепта: {datetime.now().strftime('%d.%m.%Y')}
-                </div>
-            </div>
-        </div>
-        """
-        st.markdown(act_html, unsafe_allow_html=True)
+        # Embedded preview in Streamlit
+        components.html(act_html, height=850, scrolling=True)
 
         st.write("")
         b64_act = base64.b64encode(act_html.encode("utf-8")).decode("utf-8")
@@ -860,7 +884,7 @@ def main():
             f'<a href="data:text/html;base64,{b64_act}" '
             f'download="Акт_проверки_залога_{selected_raw_id}.html" '
             f'style="background:#21a038; color:white; padding:10px 18px; border-radius:6px; '
-            f'text-decoration:none; font-weight:600;">📥 Скачать официальный Акт (HTML / Печать)</a>'
+            f'text-decoration:none; font-weight:600;">📥 Скачать официальный Акт (HTML / Печать A4)</a>'
         )
         st.markdown(href, unsafe_allow_html=True)
 
