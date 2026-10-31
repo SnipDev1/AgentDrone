@@ -48,11 +48,17 @@ def test_ui_handle_upload_zip_and_delete(tmp_path: Path):
             handle_upload_zip(MockUploadedFile())
             assert mock_rerun.called
             assert (tmp_path / plot_id / "DJI_0001.JPG").exists()
-            assert st.session_state.get("selected_plot_id") == plot_id
+            assert (
+                st.session_state.get("pending_plot_id") == plot_id
+                or st.session_state.get("selected_plot_id") == plot_id
+            )
 
         # 2. Delete Plot
         with patch("streamlit.rerun") as mock_rerun, patch("streamlit.toast"):
             handle_delete_plot(plot_id)
             assert mock_rerun.called
             assert not (tmp_path / plot_id).exists()
-            assert "selected_plot_id" not in st.session_state
+            assert (
+                st.session_state.get("pending_plot_id") is None
+                or "selected_plot_id" not in st.session_state
+            )

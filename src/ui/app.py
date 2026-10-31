@@ -56,13 +56,12 @@ import src.report.builder as _mod_rb  # noqa: E402
 import src.report.generator as _mod_rg  # noqa: E402
 import src.ui.sber_theme as _mod_st  # noqa: E402
 
-if getattr(sys, "_agentdrone_reloaded_v18", False) is False:
-    if "pytest" not in sys.modules:
-        for _m_schema in (_mod_mschemas, _mod_mcred, _mod_minsp, _mod_mstrat, _mod_models):
-            try:
-                importlib.reload(_m_schema)
-            except Exception:
-                pass
+if "pytest" not in sys.modules and getattr(sys, "_agentdrone_reloaded_v18", False) is False:
+    for _m_schema in (_mod_mschemas, _mod_mcred, _mod_minsp, _mod_mstrat, _mod_models):
+        try:
+            importlib.reload(_m_schema)
+        except Exception:
+            pass
     for _m in (
         _mod_cfg,
         _mod_st,
@@ -217,8 +216,7 @@ def handle_delete_plot(plot_id: str) -> None:
         if deleted:
             CadastralRegistry.remove_from_cache(plot_id)
             clear_all_caches()
-            if st.session_state.get("selected_plot_id") == plot_id:
-                del st.session_state["selected_plot_id"]
+            st.session_state["pending_plot_id"] = None
             st.toast(f"Объект {normalize_cadastral_id(plot_id)} удален с сервера.")
             st.rerun()
         else:
@@ -232,8 +230,7 @@ def handle_delete_all_plots() -> None:
     try:
         count = ParcelManager.delete_all_plots()
         clear_all_caches()
-        if "selected_plot_id" in st.session_state:
-            del st.session_state["selected_plot_id"]
+        st.session_state["pending_plot_id"] = None
         st.toast(f"Удалено объектов с сервера: {count}")
         st.rerun()
     except Exception as exc:
@@ -258,7 +255,7 @@ def handle_upload_zip(uploaded_zip, target_plot_id: str | None = None) -> None:
         )
         clear_all_caches()
         if extracted_ids:
-            st.session_state["selected_plot_id"] = extracted_ids[0]
+            st.session_state["pending_plot_id"] = extracted_ids[0]
             st.toast(f"Загружено участков: {len(extracted_ids)} ({', '.join(extracted_ids)})")
             st.rerun()
         else:
@@ -279,7 +276,7 @@ def handle_upload_files(target_plot_id: str, uploaded_files: list) -> None:
         file_tuples = [(f.name, f.getvalue()) for f in uploaded_files]
         saved_id = ParcelManager.upload_files(target_plot_id.strip(), file_tuples)
         clear_all_caches()
-        st.session_state["selected_plot_id"] = saved_id
+        st.session_state["pending_plot_id"] = saved_id
         st.toast(f"Объект {normalize_cadastral_id(saved_id)} ({len(file_tuples)} файлов) загружен.")
         st.rerun()
     except Exception as exc:
@@ -569,6 +566,14 @@ def build_inspection_folium_map(
 def main() -> None:
     apply_custom_css()
     plot_ids = get_available_plot_ids()
+
+    # Process any pending plot selection BEFORE widgets are created
+    if "pending_plot_id" in st.session_state:
+        pending_id = st.session_state.pop("pending_plot_id")
+        if pending_id in plot_ids:
+            st.session_state["selected_plot_id"] = pending_id
+        elif pending_id is None and "selected_plot_id" in st.session_state:
+            del st.session_state["selected_plot_id"]
 
     if "inspected_plots" not in st.session_state:
         st.session_state["inspected_plots"] = {}
@@ -1276,7 +1281,7 @@ def main() -> None:
                     st.markdown("Статус: *Ожидает осмотра*")
             with r_c4:
                 if st.button("Открыть", key=f"open_{raw_pid}", use_container_width=True):
-                    st.session_state["selected_plot_id"] = raw_pid
+                    st.session_state["pending_plot_id"] = raw_pid
                     st.rerun()
             with r_c5:
                 if st.button("Удалить", key=f"del_{raw_pid}", use_container_width=True):
