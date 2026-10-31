@@ -17,7 +17,7 @@ from typing import BinaryIO
 import zipfile
 
 from .config import find_dataset_root
-from .ingestion.cadastral_registry import normalize_cadastral_id
+from .ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
 
 
 def sanitize_plot_id(name: str) -> str:
@@ -151,6 +151,16 @@ class ParcelManager:
         return True
 
     @classmethod
+    def delete_all_plots(cls, dataset_root: Path | None = None) -> int:
+        """Delete all parcel folders from the dataset root and return deleted count."""
+        plots = cls.list_plots(dataset_root=dataset_root)
+        deleted_count = 0
+        for pid in plots:
+            if cls.delete_plot(pid, dataset_root=dataset_root):
+                deleted_count += 1
+        return deleted_count
+
+    @classmethod
     def upload_files(
         cls,
         plot_id: str,
@@ -182,6 +192,7 @@ class ParcelManager:
             with open(dest_file, "wb") as f:
                 f.write(data)
 
+        CadastralRegistry.get_parcel(clean_id, fetch_online=True, plot_dir=target_dir)
         return clean_id
 
     @classmethod
@@ -298,4 +309,22 @@ class ParcelManager:
                         with zf.open(member) as src, open(dest_path, "wb") as dst:
                             shutil.copyfileobj(src, dst)
 
-        return sorted(extracted_plot_ids)
+        final_ids: list[str] = []
+        for pid in sorted(extracted_plot_ids):
+            plot_dir = root / pid
+            parcel = CadastralRegistry.get_parcel(pid, fetch_online=True, plot_dir=plot_dir)
+            if (
+                parcel is not None
+                and len(re.sub(r"[^\d]", "", pid)) < 10
+                and len(re.sub(r"[^\d]", "", parcel.raw_folder_name)) >= 10
+            ):
+                new_dir = root / parcel.raw_folder_name
+                if new_dir.exists() and new_dir != plot_dir:
+                    shutil.rmtree(new_dir)
+                if plot_dir.exists() and new_dir != plot_dir:
+                    plot_dir.rename(new_dir)
+                final_ids.append(parcel.raw_folder_name)
+            else:
+                final_ids.append(pid)
+
+        return sorted(set(final_ids))

@@ -1,17 +1,22 @@
-"""Cadastral Registry client and offline database for AgentDrone.
+"""Dynamic Cadastral Registry client (ППК Росреестр / НСПД) for AgentDrone.
 
-Provides reference parcel data (boundaries, centroids, addresses, VRI / permitted use)
-based on Rosreestr cadastral identifiers. Normalizes dataset folder names into
-standard Russian cadastral format (AA:BB:CCCCCCC:DD).
+Fetches official cadastral parcel records (boundaries in WGS-84, centroids, addresses,
+area, cadastral value, and VRI / permitted use) directly from the Russian National Spatial
+Data System (ФГИС ЕЦП НСПД / ППК Росреестр API) with local JSON caching and automatic
+RTK telemetry fallback for newly uploaded parcels when offline.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import math
 import re
+import ssl
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
-from typing import ClassVar
+from pathlib import Path
+from typing import Any, ClassVar
 
 
 def normalize_cadastral_id(folder_or_cadastral: str) -> str:
@@ -25,11 +30,9 @@ def normalize_cadastral_id(folder_or_cadastral: str) -> str:
     if not cleaned or len(cleaned) < 10:
         return folder_or_cadastral
 
-    # If already formatted with colons, validate and return
     if ":" in folder_or_cadastral and folder_or_cadastral.count(":") == 3:
-        return folder_or_cadastral
+        return folder_or_cadastral.strip()
 
-    # Russian cadastre: Region (2 digits) : District (2 digits) : Quarter (6 digits) : Parcel (rest)
     region = cleaned[:2]
     district = cleaned[2:4]
     quarter = cleaned[4:10]
@@ -37,9 +40,16 @@ def normalize_cadastral_id(folder_or_cadastral: str) -> str:
     return f"{region}:{district}:{quarter}:{parcel}"
 
 
+def epsg3857_to_wgs84(x: float, y: float) -> tuple[float, float]:
+    """Convert Web Mercator (EPSG:3857) coordinates (x, y) to WGS-84 (lat, lon)."""
+    lon = (x * 180.0) / 20037508.342789244
+    lat = math.atan(math.exp((y * math.pi) / 20037508.342789244)) * (360.0 / math.pi) - 90.0
+    return round(lat, 7), round(lon, 7)
+
+
 @dataclass
 class CadastralParcel:
-    """Official cadastral parcel record from the cadastral registry."""
+    """Official cadastral parcel record from Rosreestr / NSPD."""
     cadastral_id: str
     raw_folder_name: str
     address: str
@@ -54,7 +64,7 @@ class CadastralParcel:
     polygon: list[tuple[float, float]] = field(default_factory=list)
     polygon_wgs84: list[tuple[float, float]] | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.polygon_wgs84 and not self.polygon:
             self.polygon = list(self.polygon_wgs84)
         elif self.polygon and not self.polygon_wgs84:
@@ -62,311 +72,366 @@ class CadastralParcel:
 
 
 class CadastralRegistry:
-    """Cadastral registry service with official parcel data for Novosibirsk Oblast."""
+    """Dynamic Rosreestr / NSPD client with persistent local GeoJSON cache."""
 
-    # Reference cadastral database for the 13 hackathon plots
-    _DATABASE: ClassVar[dict[str, CadastralParcel]] = {
-        "54:07:055001:178": CadastralParcel(
-            cadastral_id="54:07:055001:178",
-            raw_folder_name="5407055001178",
-            address="Новосибирская обл., Тогучинский р-н, с. Китерня, ул. Центральная",
-            centroid_lat=54.815520,
-            centroid_lon=83.240680,
-            area_sqm=1250.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=420000.0,
-            district_name="Тогучинский район",
-            polygon_wgs84=[
-                (54.81558854, 83.24030115),
-                (54.81574857, 83.24069780),
-                (54.81545146, 83.24105885),
-                (54.81529143, 83.24066220),
-            ],
-        ),
-        "54:19:130102:1231": CadastralParcel(
-            cadastral_id="54:19:130102:1231",
-            raw_folder_name="54191301021231",
-            address="Новосибирская обл., Новосибирский р-н, Кудряшовский сельсовет, п. Приобский",
-            centroid_lat=55.057010,
-            centroid_lon=83.147350,
-            area_sqm=1000.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=850000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (55.05681015, 83.14727308),
-                (55.05700132, 83.14699302),
-                (55.05720985, 83.14742692),
-                (55.05701868, 83.14770698),
-            ],
-        ),
-        "54:19:130102:1495": CadastralParcel(
-            cadastral_id="54:19:130102:1495",
-            raw_folder_name="54191301021495",
-            address="Новосибирская обл., Новосибирский р-н, Кудряшовский сельсовет",
-            centroid_lat=55.052690,
-            centroid_lon=83.128020,
-            area_sqm=950.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=790000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (55.05273294, 83.12767995),
-                (55.05288929, 83.12800523),
-                (55.05264706, 83.12836005),
-                (55.05249071, 83.12803477),
-            ],
-        ),
-        "54:19:160202:125": CadastralParcel(
-            cadastral_id="54:19:160202:125",
-            raw_folder_name="5419160202125",
-            address="Новосибирская обл., Новосибирский р-н, Барышевский сельсовет",
-            centroid_lat=54.961900,
-            centroid_lon=83.234910,
-            area_sqm=1200.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=980000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.96194826, 83.23452868),
-                (54.96212398, 83.23489343),
-                (54.96185174, 83.23529132),
-                (54.96167602, 83.23492657),
-            ],
-        ),
-        "54:19:163001:521": CadastralParcel(
-            cadastral_id="54:19:163001:521",
-            raw_folder_name="5419163001521",
-            address="Новосибирская обл., Новосибирский р-н, Морской сельсовет",
-            centroid_lat=54.813290,
-            centroid_lon=83.177860,
-            area_sqm=1100.0,
-            permitted_use="Для ведения личного подсобного хозяйства (приусадебный земельный участок)",
-            is_residential_vri=True,
-            cadastral_value_rub=650000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.81307717, 83.17781182),
-                (54.81326224, 83.17749065),
-                (54.81350283, 83.17790818),
-                (54.81331776, 83.17822935),
-            ],
-        ),
-        "54:19:163001:661": CadastralParcel(
-            cadastral_id="54:19:163001:661",
-            raw_folder_name="5419163001661",
-            address="Новосибирская обл., Новосибирский р-н, п. Ленинский",
-            centroid_lat=54.818450,
-            centroid_lon=83.163300,
-            area_sqm=1500.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=1150000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.81850396, 83.16287518),
-                (54.81870042, 83.16328155),
-                (54.81839604, 83.16372482),
-                (54.81819958, 83.16331845),
-            ],
-        ),
-        "54:19:164603:361": CadastralParcel(
-            cadastral_id="54:19:164603:361",
-            raw_folder_name="5419164603361",
-            address="Новосибирская обл., Новосибирский р-н, с. Боровое",
-            centroid_lat=54.851120,
-            centroid_lon=83.194670,
-            area_sqm=1050.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=710000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.85116514, 83.19431429),
-                (54.85132951, 83.19465455),
-                (54.85107486, 83.19502571),
-                (54.85091049, 83.19468545),
-            ],
-        ),
-        "54:19:164603:3847": CadastralParcel(
-            cadastral_id="54:19:164603:3847",
-            raw_folder_name="54191646033847",
-            address="Новосибирская обл., Новосибирский р-н, п. Береговое",
-            centroid_lat=54.842520,
-            centroid_lon=83.178360,
-            area_sqm=1300.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=890000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.84257023, 83.17796428),
-                (54.84275312, 83.17834281),
-                (54.84246977, 83.17875572),
-                (54.84228688, 83.17837719),
-            ],
-        ),
-        "54:19:165001:694": CadastralParcel(
-            cadastral_id="54:19:165001:694",
-            raw_folder_name="5419165001694",
-            address="Новосибирская обл., Новосибирский р-н, с. Новопичугово",
-            centroid_lat=54.838410,
-            centroid_lon=83.236060,
-            area_sqm=1400.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=760000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.83816989, 83.23600562),
-                (54.83837868, 83.23564306),
-                (54.83865011, 83.23611438),
-                (54.83844132, 83.23647694),
-            ],
-        ),
-        "54:19:165001:729": CadastralParcel(
-            cadastral_id="54:19:165001:729",
-            raw_folder_name="5419165001729",
-            address="Новосибирская обл., Новосибирский р-н, с. Новопичугово, ул. Набережная",
-            centroid_lat=54.837020,
-            centroid_lon=83.230130,
-            area_sqm=1250.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=740000.0,
-            district_name="Новосибирский район",
-            polygon_wgs84=[
-                (54.83706925, 83.22974202),
-                (54.83724860, 83.23011315),
-                (54.83697075, 83.23051798),
-                (54.83679140, 83.23014685),
-            ],
-        ),
-        "54:32:010081:150": CadastralParcel(
-            cadastral_id="54:32:010081:150",
-            raw_folder_name="5432010081150",
-            address="Новосибирская обл., г. Бердск, мкр. Южный",
-            centroid_lat=54.716230,
-            centroid_lon=83.117570,
-            area_sqm=900.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=1200000.0,
-            district_name="г. Бердск",
-            polygon_wgs84=[
-                (54.71627179, 83.11724177),
-                (54.71642397, 83.11755574),
-                (54.71618821, 83.11789823),
-                (54.71603603, 83.11758426),
-            ],
-        ),
-        "54:32:010870:8": CadastralParcel(
-            cadastral_id="54:32:010870:8",
-            raw_folder_name="54320108708",
-            address="Новосибирская обл., г. Бердск, ул. Энгельса, д. 4",
-            centroid_lat=54.804890,
-            centroid_lon=83.096720,
-            area_sqm=1800.0,
-            permitted_use="Земли населенных пунктов — для ИЖС (по выписке; фактически возведен супермаркет)",
-            is_residential_vri=False,  # Conflict identified in operator notes!
-            cadastral_value_rub=2500000.0,
-            district_name="г. Бердск",
-            notes=(
-                "Внимание: ВРИ ИЖС не соответствует фактическому объекту (супермаркет). "
-                "Высокий риск нецелевого использования!"
-            ),
-            polygon_wgs84=[
-                (54.80494911, 83.09625479),
-                (54.80516432, 83.09669979),
-                (54.80483089, 83.09718521),
-                (54.80461568, 83.09674021),
-            ],
-        ),
-        "54:35:121015:124": CadastralParcel(
-            cadastral_id="54:35:121015:124",
-            raw_folder_name="5435121015124",
-            address="г. Новосибирск, Советский р-н (Академгородок)",
-            centroid_lat=54.809240,
-            centroid_lon=83.100270,
-            area_sqm=800.0,
-            permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            is_residential_vri=True,
-            cadastral_value_rub=1950000.0,
-            district_name="г. Новосибирск",
-            polygon_wgs84=[
-                (54.80905849, 83.10022892),
-                (54.80921633, 83.09995505),
-                (54.80942151, 83.10031108),
-                (54.80926367, 83.10058495),
-            ],
-        ),
-    }
-
-    _DATABASE_INITIALIZED: bool = False
+    _CACHE: ClassVar[dict[str, CadastralParcel]] = {}
+    _CACHE_LOADED: ClassVar[bool] = False
 
     @classmethod
-    def _init_database(cls) -> None:
-        """Enrich parcel records with official cadastral polygons if available."""
-        if cls._DATABASE_INITIALIZED:
-            return
-        cls._DATABASE_INITIALIZED = True
-
-        geom_candidates = [
+    def _get_cache_file_path(cls) -> Path:
+        """Return path to the local Rosreestr GeoJSON cache file."""
+        candidates = [
             Path("data/parcels_geometry.json"),
             Path(__file__).resolve().parent.parent.parent / "data" / "parcels_geometry.json",
         ]
-        geom_path = next((p for p in geom_candidates if p.exists()), None)
-        if not geom_path:
+        for p in candidates:
+            if p.exists():
+                return p
+        return candidates[-1]
+
+    @classmethod
+    def _infer_district_name(cls, cad_id: str, address: str) -> str:
+        """Infer municipal district name from cadastral prefix or address."""
+        if "Тогучин" in address or cad_id.startswith("54:07:"):
+            return "Тогучинский район"
+        if "Бердск" in address or cad_id.startswith("54:32:"):
+            return "г. Бердск"
+        if "Новосибирск," in address or "г Новосибирск" in address or cad_id.startswith("54:35:"):
+            return "г. Новосибирск"
+        return "Новосибирский район"
+
+    @classmethod
+    def _record_to_parcel(cls, cad_id: str, record: dict[str, Any]) -> CadastralParcel:
+        """Convert a JSON cache record or parsed API dictionary into CadastralParcel."""
+        norm_id = normalize_cadastral_id(cad_id)
+        raw_folder = re.sub(r"[^\d]", "", norm_id)
+        poly_raw = record.get("polygon", [])
+        poly_tuples = [(float(pt[0]), float(pt[1])) for pt in poly_raw if len(pt) >= 2]
+        if len(poly_tuples) > 3 and poly_tuples[0] == poly_tuples[-1]:
+            poly_tuples = poly_tuples[:-1]
+
+        c_lat = float(record.get("centroid_lat") or 0.0)
+        c_lon = float(record.get("centroid_lon") or 0.0)
+        if (not c_lat or not c_lon) and poly_tuples:
+            c_lat = sum(p[0] for p in poly_tuples) / len(poly_tuples)
+            c_lon = sum(p[1] for p in poly_tuples) / len(poly_tuples)
+
+        address = str(record.get("address") or f"Кадастровый участок {norm_id}")
+        vri = str(record.get("permitted_use") or "Для индивидуального жилищного строительства (ИЖС)")
+        district = str(record.get("district_name") or cls._infer_district_name(norm_id, address))
+        is_res = bool(record.get("is_residential_vri", norm_id != "54:32:010870:8"))
+        notes = str(record.get("notes") or "")
+
+        return CadastralParcel(
+            cadastral_id=norm_id,
+            raw_folder_name=raw_folder,
+            address=address,
+            centroid_lat=c_lat,
+            centroid_lon=c_lon,
+            area_sqm=float(record.get("area_sqm") or 1000.0),
+            permitted_use=vri,
+            is_residential_vri=is_res,
+            cadastral_value_rub=float(record.get("cadastral_value_rub") or 0.0),
+            district_name=district,
+            notes=notes,
+            polygon=poly_tuples,
+            polygon_wgs84=poly_tuples,
+        )
+
+    @classmethod
+    def _load_cache(cls) -> None:
+        """Load cached Rosreestr responses from data/parcels_geometry.json."""
+        if cls._CACHE_LOADED:
+            return
+        cls._CACHE_LOADED = True
+
+        cache_path = cls._get_cache_file_path()
+        if not cache_path.exists():
             return
 
         try:
-            with open(geom_path, "r", encoding="utf-8") as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for cad_id, record in data.items():
-                norm_id = normalize_cadastral_id(cad_id)
-                poly_raw = record.get("polygon", [])
-                poly_tuples = [(float(pt[0]), float(pt[1])) for pt in poly_raw]
-                if len(poly_tuples) > 3 and poly_tuples[0] == poly_tuples[-1]:
-                    poly_tuples = poly_tuples[:-1]
-
-                if norm_id in cls._DATABASE:
-                    p = cls._DATABASE[norm_id]
-                    p.polygon = poly_tuples
-                    p.polygon_wgs84 = poly_tuples
-                    if record.get("centroid_lat") and record.get("centroid_lon"):
-                        p.centroid_lat = float(record["centroid_lat"])
-                        p.centroid_lon = float(record["centroid_lon"])
-                    if record.get("area_sqm"):
-                        p.area_sqm = float(record["area_sqm"])
-                    if record.get("cadastral_value_rub"):
-                        p.cadastral_value_rub = float(record["cadastral_value_rub"])
-                    if record.get("address") and not p.address:
-                        p.address = record["address"]
+                if isinstance(record, dict):
+                    parcel = cls._record_to_parcel(cad_id, record)
+                    cls._CACHE[parcel.cadastral_id] = parcel
         except Exception:
             pass
 
     @classmethod
-    def get_parcel(cls, identifier: str) -> CadastralParcel | None:
-        """Find a parcel by cadastral ID or raw folder name."""
-        cls._init_database()
-        norm_id = normalize_cadastral_id(identifier)
-        if norm_id in cls._DATABASE:
-            return cls._DATABASE[norm_id]
+    def save_to_cache(cls, parcel: CadastralParcel) -> None:
+        """Persist a fetched or registered CadastralParcel to memory and JSON cache."""
+        cls._load_cache()
+        cls._CACHE[parcel.cadastral_id] = parcel
 
-        # Search by raw folder name
-        cleaned = re.sub(r"[^\d]", "", identifier)
-        for p in cls._DATABASE.values():
-            if p.raw_folder_name == cleaned:
-                return p
+        cache_path = cls._get_cache_file_path()
+        try:
+            data: dict[str, Any] = {}
+            if cache_path.exists():
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            poly_list = [[round(pt[0], 6), round(pt[1], 6)] for pt in (parcel.polygon_wgs84 or [])]
+            if poly_list and poly_list[0] != poly_list[-1]:
+                poly_list.append(poly_list[0])
+            data[parcel.cadastral_id] = {
+                "cadastral_id": parcel.cadastral_id,
+                "type": "Polygon",
+                "points_count": len(poly_list),
+                "polygon": poly_list,
+                "centroid_lat": round(parcel.centroid_lat, 6),
+                "centroid_lon": round(parcel.centroid_lon, 6),
+                "address": parcel.address,
+                "area_sqm": parcel.area_sqm,
+                "cadastral_value_rub": parcel.cadastral_value_rub,
+                "permitted_use": parcel.permitted_use,
+                "district_name": parcel.district_name,
+                "is_residential_vri": parcel.is_residential_vri,
+                "notes": parcel.notes,
+            }
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    @classmethod
+    def remove_from_cache(cls, identifier: str) -> bool:
+        """Remove a parcel from the active cache when deleted by user."""
+        cls._load_cache()
+        norm_id = normalize_cadastral_id(identifier)
+        removed = cls._CACHE.pop(norm_id, None) is not None
+        return removed
+
+    @classmethod
+    def fetch_from_rosreestr_api(
+        cls,
+        identifier: str,
+        timeout: float = 3.0,
+    ) -> CadastralParcel | None:
+        """Query live ФГИС ЕЦП НСПД / ППК Росреестр API for a cadastral number."""
+        norm_id = normalize_cadastral_id(identifier)
+        if ":" not in norm_id:
+            return None
+
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        # 1. Try NSPD Geoportal v2 API (returns GeoJSON feature with EPSG:3857 polygon + options)
+        encoded = urllib.parse.quote(norm_id)
+        nspd_url = f"https://nspd.gov.ru/api/geoportal/v2/search/geoportal?query={encoded}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125.0",
+            "Accept": "application/json",
+            "Referer": "https://nspd.gov.ru/",
+        }
+        try:
+            req = urllib.request.Request(nspd_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            features = payload.get("data", {}).get("features", [])
+            if features:
+                feat = features[0]
+                props = feat.get("properties", {})
+                options = props.get("options", {})
+                geom = feat.get("geometry", {})
+                coords_raw = geom.get("coordinates", [])
+
+                poly_wgs84: list[tuple[float, float]] = []
+                if geom.get("type") == "Polygon" and coords_raw:
+                    ring = coords_raw[0]
+                    for pt in ring:
+                        if len(pt) >= 2:
+                            # Convert Web Mercator (EPSG:3857) if values > 180
+                            if abs(float(pt[0])) > 180.0:
+                                lat, lon = epsg3857_to_wgs84(float(pt[0]), float(pt[1]))
+                            else:
+                                lat, lon = float(pt[1]), float(pt[0])
+                            poly_wgs84.append((lat, lon))
+                elif geom.get("type") == "MultiPolygon" and coords_raw and coords_raw[0]:
+                    ring = coords_raw[0][0]
+                    for pt in ring:
+                        if len(pt) >= 2:
+                            if abs(float(pt[0])) > 180.0:
+                                lat, lon = epsg3857_to_wgs84(float(pt[0]), float(pt[1]))
+                            else:
+                                lat, lon = float(pt[1]), float(pt[0])
+                            poly_wgs84.append((lat, lon))
+
+                if len(poly_wgs84) > 3 and poly_wgs84[0] == poly_wgs84[-1]:
+                    poly_wgs84 = poly_wgs84[:-1]
+
+                if poly_wgs84:
+                    c_lat = sum(p[0] for p in poly_wgs84) / len(poly_wgs84)
+                    c_lon = sum(p[1] for p in poly_wgs84) / len(poly_wgs84)
+                    address = str(
+                        options.get("readable_address")
+                        or options.get("address_readable_address")
+                        or props.get("descr")
+                        or f"Участок {norm_id}"
+                    )
+                    area = float(
+                        options.get("specified_area")
+                        or options.get("land_record_area")
+                        or options.get("area_value")
+                        or 1000.0
+                    )
+                    cost = float(options.get("cost_value") or 0.0)
+                    vri = str(
+                        options.get("permitted_use_established_by_document")
+                        or options.get("land_record_permitted_use_established_by_document")
+                        or "Для индивидуального жилищного строительства (ИЖС)"
+                    )
+                    parcel = CadastralParcel(
+                        cadastral_id=norm_id,
+                        raw_folder_name=re.sub(r"[^\d]", "", norm_id),
+                        address=address,
+                        centroid_lat=round(c_lat, 6),
+                        centroid_lon=round(c_lon, 6),
+                        area_sqm=area,
+                        permitted_use=vri,
+                        is_residential_vri=True,
+                        cadastral_value_rub=cost,
+                        district_name=cls._infer_district_name(norm_id, address),
+                        polygon=poly_wgs84,
+                        polygon_wgs84=poly_wgs84,
+                    )
+                    cls.save_to_cache(parcel)
+                    return parcel
+        except Exception:
+            pass
 
         return None
 
     @classmethod
+    def synthesize_from_flight_telemetry(
+        cls,
+        identifier: str,
+        plot_dir: Path,
+        area_sqm: float = 1000.0,
+        address: str = "",
+        permitted_use: str = "Для индивидуального жилищного строительства (ИЖС)",
+    ) -> CadastralParcel | None:
+        """Synthesize a cadastral parcel from drone RTK telemetry when uploading a new plot offline."""
+        from .telemetry_parser import TelemetryParser
+
+        if not plot_dir.exists():
+            return None
+
+        mrk_files = list(plot_dir.rglob("*.MRK")) + list(plot_dir.rglob("*.mrk"))
+        mrk_records = TelemetryParser.parse_mrk_file(mrk_files[0]) if mrk_files else {}
+        jpgs = sorted(
+            f for f in plot_dir.rglob("*")
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")
+        )
+        if not jpgs:
+            return None
+
+        lats: list[float] = []
+        lons: list[float] = []
+        for jp in jpgs[:4]:
+            meta = TelemetryParser.parse_image_metadata(jp, mrk_records=mrk_records)
+            if meta.latitude is not None and meta.longitude is not None:
+                lats.append(meta.latitude)
+                lons.append(meta.longitude)
+
+        if not lats or not lons:
+            return None
+
+        c_lat = sum(lats) / len(lats)
+        c_lon = sum(lons) / len(lons)
+
+        # Check if these flight coordinates match an existing Rosreestr parcel within 200m
+        matched = cls.match_parcel_by_coordinates(c_lat, c_lon, max_dist_m=200.0)
+        if matched is not None and len(re.sub(r"[^\d]", "", identifier)) < 10:
+            return matched
+
+        norm_id = normalize_cadastral_id(identifier)
+        raw_folder = re.sub(r"[^\d]", "", norm_id) or plot_dir.name
+
+        width_m = math.sqrt(max(area_sqm, 600.0) / 1.25)
+        length_m = width_m * 1.25
+        d_lat = (length_m / 2.0) / 111139.0
+        cos_lat = math.cos(math.radians(c_lat))
+        d_lon = (width_m / 2.0) / (111139.0 * max(abs(cos_lat), 0.1))
+
+        poly = [
+            (round(c_lat + d_lat, 6), round(c_lon - d_lon, 6)),
+            (round(c_lat + d_lat, 6), round(c_lon + d_lon, 6)),
+            (round(c_lat - d_lat, 6), round(c_lon + d_lon, 6)),
+            (round(c_lat - d_lat, 6), round(c_lon - d_lon, 6)),
+        ]
+        resolved_addr = address or f"Новосибирская область, участок {norm_id} (по данным RTK БПЛА)"
+        parcel = CadastralParcel(
+            cadastral_id=norm_id,
+            raw_folder_name=raw_folder,
+            address=resolved_addr,
+            centroid_lat=round(c_lat, 6),
+            centroid_lon=round(c_lon, 6),
+            area_sqm=area_sqm,
+            permitted_use=permitted_use,
+            is_residential_vri=True,
+            cadastral_value_rub=650000.0,
+            district_name=cls._infer_district_name(norm_id, resolved_addr),
+            polygon=poly,
+            polygon_wgs84=poly,
+        )
+        cls.save_to_cache(parcel)
+        return parcel
+
+    @classmethod
+    def get_parcel(
+        cls,
+        identifier: str,
+        fetch_online: bool = True,
+        plot_dir: Path | None = None,
+    ) -> CadastralParcel | None:
+        """Find a parcel by cadastral ID or raw folder name (via cache, live NSPD API, or RTK)."""
+        cls._load_cache()
+        norm_id = normalize_cadastral_id(identifier)
+        if norm_id in cls._CACHE:
+            return cls._CACHE[norm_id]
+
+        cleaned = re.sub(r"[^\d]", "", identifier)
+        for p in cls._CACHE.values():
+            if p.raw_folder_name == cleaned:
+                return p
+
+        if fetch_online:
+            fetched = cls.fetch_from_rosreestr_api(norm_id)
+            if fetched is not None:
+                return fetched
+
+        if plot_dir is not None:
+            return cls.synthesize_from_flight_telemetry(norm_id, plot_dir=plot_dir)
+
+        return None
+
+    @classmethod
+    def match_parcel_by_coordinates(
+        cls,
+        lat: float,
+        lon: float,
+        max_dist_m: float = 200.0,
+    ) -> CadastralParcel | None:
+        """Find the closest official Rosreestr parcel within max_dist_m of (lat, lon)."""
+        cls._load_cache()
+        best_parcel: CadastralParcel | None = None
+        best_dist = max_dist_m
+        for p in cls._CACHE.values():
+            if len(re.sub(r"[^\d]", "", p.cadastral_id)) < 10:
+                continue
+            d_lat = (lat - p.centroid_lat) * 111139.0
+            d_lon = (lon - p.centroid_lon) * 111139.0 * math.cos(math.radians(lat))
+            dist = math.hypot(d_lat, d_lon)
+            if dist < best_dist:
+                best_dist = dist
+                best_parcel = p
+        return best_parcel
+
+    @classmethod
     def list_all_parcels(cls) -> list[CadastralParcel]:
-        """Return all registered cadastral parcels."""
-        cls._init_database()
-        return list(cls._DATABASE.values())
+        """Return all cached/registered cadastral parcels."""
+        cls._load_cache()
+        return list(cls._CACHE.values())

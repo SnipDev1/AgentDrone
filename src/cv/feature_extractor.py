@@ -32,6 +32,12 @@ class ImageFeatures:
     structure_area_ratio: float
     has_roof_contour: bool
     window_openings_count: int
+    bare_soil_ratio: float = 0.0
+    foundation_slab_ratio: float = 0.0
+    pallet_wrap_ratio: float = 0.0
+    dark_membrane_ratio: float = 0.0
+    unfinished_vapor_barrier: bool = False
+    center_natural_ratio: float = 0.0
 
 
 class FeatureExtractor:
@@ -72,6 +78,59 @@ class FeatureExtractor:
         green_mask = cv2.inRange(hsv, np.array([32, 35, 35]), np.array([85, 255, 255]))
         veg_pixels = float(np.count_nonzero(green_mask))
         vegetation_ratio = veg_pixels / total_pixels
+
+        # 2b. Construction stage indicators in central target ROI
+        roi_bgr = resized[140:580, 180:780]
+        roi_hsv = hsv[140:580, 180:780]
+        rH, rS, rV = roi_hsv[:, :, 0], roi_hsv[:, :, 1], roi_hsv[:, :, 2]
+        roi_tot = float(roi_bgr.shape[0] * roi_bgr.shape[1])
+
+        soil_mask_roi = (rH >= 6) & (rH <= 26) & (rS >= 38) & (rS <= 175) & (rV >= 45) & (rV <= 190)
+        bare_soil_ratio = float(np.count_nonzero(soil_mask_roi)) / roi_tot
+
+        dark_mem_mask = (rV <= 65) & (rS <= 80)
+        dark_membrane_ratio = float(np.count_nonzero(dark_mem_mask)) / roi_tot
+
+        cbox_bgr = resized[240:480, 320:640]
+        cbox_hsv = hsv[240:480, 320:640]
+        cH, cS, cV = cbox_hsv[:, :, 0], cbox_hsv[:, :, 1], cbox_hsv[:, :, 2]
+        cB, _, cR = cbox_bgr[:, :, 0], cbox_bgr[:, :, 1], cbox_bgr[:, :, 2]
+        cbox_tot = float(cbox_bgr.shape[0] * cbox_bgr.shape[1])
+
+        slab_mask = (cV >= 170) & (cS <= 45) & (cR >= cB)
+        foundation_slab_ratio = float(np.count_nonzero(slab_mask)) / cbox_tot
+
+        ywrap_mask = (cH >= 18) & (cH <= 34) & (cS >= 140) & (cV >= 165)
+        pallet_wrap_ratio = float(np.count_nonzero(ywrap_mask)) / cbox_tot
+
+        # Natural grass + soil share in center box [220:500, 300:660]
+        nat_hsv = hsv[220:500, 300:660]
+        nH, nS, nV = nat_hsv[:, :, 0], nat_hsv[:, :, 1], nat_hsv[:, :, 2]
+        nat_green = (nH >= 26) & (nH <= 90) & (nS >= 30) & (nV >= 25)
+        nat_soil = (nH >= 6) & (nH < 26) & (nS >= 35) & (nS <= 175) & (nV >= 40) & (nV <= 190)
+        center_natural_ratio = float(np.count_nonzero(nat_green | nat_soil)) / float(
+            nat_hsv.shape[0] * nat_hsv.shape[1]
+        )
+
+        # Unfinished timber frame under slate roof with white vapor barrier in forest clearing
+        slate_sub = hsv[240:420, 380:620]
+        slate_share = float(
+            np.count_nonzero(
+                (slate_sub[:, :, 0] >= 100)
+                & (slate_sub[:, :, 0] <= 116)
+                & (slate_sub[:, :, 1] >= 15)
+                & (slate_sub[:, :, 1] <= 75)
+                & (slate_sub[:, :, 2] >= 75)
+                & (slate_sub[:, :, 2] <= 190)
+            )
+        ) / float(slate_sub.shape[0] * slate_sub.shape[1])
+        vapor_sub = hsv[240:460, 360:620]
+        vapor_share = float(
+            np.count_nonzero((vapor_sub[:, :, 1] <= 30) & (vapor_sub[:, :, 2] >= 200))
+        ) / float(vapor_sub.shape[0] * vapor_sub.shape[1])
+        unfinished_vapor_barrier = bool(
+            vegetation_ratio >= 0.58 and slate_share >= 0.34 and vapor_share >= 0.018
+        )
 
         # 3. Non-vegetation structural area (candidate building/ground region)
         non_veg_mask = cv2.bitwise_not(green_mask)
@@ -229,4 +288,10 @@ class FeatureExtractor:
             structure_area_ratio=structure_area_ratio,
             has_roof_contour=has_roof_contour,
             window_openings_count=window_openings,
+            bare_soil_ratio=bare_soil_ratio,
+            foundation_slab_ratio=foundation_slab_ratio,
+            pallet_wrap_ratio=pallet_wrap_ratio,
+            dark_membrane_ratio=dark_membrane_ratio,
+            unfinished_vapor_barrier=unfinished_vapor_barrier,
+            center_natural_ratio=center_natural_ratio,
         )

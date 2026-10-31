@@ -52,17 +52,16 @@ class CVPipeline:
         if not resolved_dir.exists() or not resolved_dir.is_dir():
             raise FileNotFoundError(f"Plot directory not found: {resolved_dir}")
 
-        # Check for Berdsk special note
-        has_berdsk_note = any("ПОЯСНЕНИЕ" in f.name or "Энгельса" in f.name for f in resolved_dir.glob("*.txt"))
-        is_berdsk = has_berdsk_note or plot_id == "54320108708"
-
         # 2. Ingestion & Telemetry
-        mrk_files = list(resolved_dir.glob("*.MRK"))
+        mrk_files = list(resolved_dir.rglob("*.MRK")) + list(resolved_dir.rglob("*.mrk"))
         mrk_records = TelemetryParser.parse_mrk_file(mrk_files[0]) if mrk_files else {}
 
         # Scan for drone JPEG files (filter out non-DJI utility images if any)
-        raw_jpgs = sorted(resolved_dir.glob("*.JPG"))
-        drone_jpgs = [f for f in raw_jpgs if "DJI" in f.name]
+        raw_jpgs = sorted(
+            f for f in resolved_dir.rglob("*")
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")
+        )
+        drone_jpgs = [f for f in raw_jpgs if "DJI" in f.name.upper()]
         if not drone_jpgs:
             drone_jpgs = raw_jpgs
 
@@ -99,10 +98,9 @@ class CVPipeline:
         ]
         target_material_feats = facade_feats if facade_feats else features_list
         detected_material, material_conf = MaterialClassifier.classify(target_material_feats)
-
-        if is_berdsk:
-            detected_material = WallMaterial.SANDWICH_PANEL
-            material_conf = 0.92
+        all_mat, all_conf = MaterialClassifier.classify(features_list)
+        if all_mat == WallMaterial.SANDWICH_PANEL:
+            detected_material, material_conf = all_mat, all_conf
 
         # 7. Fraud and Defects Detection
         target_decl_material = declared_material or (credit_object.declared_wall_material if credit_object else None)
@@ -117,7 +115,6 @@ class CVPipeline:
             features_list=features_list,
             declared_material=target_decl_material,
             loan_purpose=loan_purpose,
-            is_berdsk_case=is_berdsk,
         )
 
         # Check telemetry anti-spoofing (EXIF vs MRK consistency)

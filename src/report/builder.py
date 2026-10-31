@@ -57,14 +57,12 @@ def build_act_from_cv(
 ) -> ActReportData:
     """Convert CV pipeline schemas (from UI or ingestion) into official ActReportData."""
     # 1. Map Credit
-    cadastral_num = getattr(credit_obj, "cadastral_id", "54:00:000000:0")
-    if ":" not in cadastral_num and len(cadastral_num) >= 10:
-        # Format cadastral like 54:07:055001:178
-        c = cadastral_num
-        if len(c) == 13:
-            cadastral_num = f"{c[:2]}:{c[2:4]}:{c[4:10]}:{c[10:]}"
-        elif len(c) == 14:
-            cadastral_num = f"{c[:2]}:{c[2:4]}:{c[4:10]}:{c[10:]}"
+    raw_cad = str(getattr(credit_obj, "cadastral_id", None) or getattr(cv_result, "cadastral_id", "54:00:000000:1"))
+    digits = "".join(ch for ch in raw_cad if ch.isdigit())
+    if len(digits) >= 10:
+        cadastral_num = f"{digits[:2]}:{digits[2:4]}:{digits[4:10]}:{digits[10:]}"
+    else:
+        cadastral_num = "54:00:000000:1"
 
     proj_mat_str = getattr(credit_obj, "declared_wall_material", "Кирпич")
     proj_mat_enum = WallMaterial.BRICK

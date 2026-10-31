@@ -1,258 +1,291 @@
-"""AgentDrone - Web Dashboard & Inspection Workplace for Sberbank.
+"""Web workspace for Sberbank Collateral Inspector (АС «Калита» / Мониторинг ИЖС).
 
-Automated AI-assisted collateral and mortgage construction monitoring using
-DJI drone telemetry, computer vision inspection, cadastral geofencing,
-and the Bank Decision Engine.
-Optimized for zero-AVX Linux server environments.
+Provides a clean, ergonomic corporate banking interface for:
+- Uploading and deleting user drone inspection folders (ZIP or JPG/MRK files)
+- Dynamic Rosreestr / NSPD cadastral data lookup (boundaries, area, VRI, value)
+- Photogrammetric red cadastral boundary overlay across all aerial shots (Shots 1..N)
+- Automated construction readiness assessment (0% / 50% / 100%) and strategy selection
+- Generating official Collateral Inspection Acts (Appendix 1, HTML/PDF)
 """
 
 from __future__ import annotations
 
 import base64
-import json
-import os
-import sys
+import importlib
+import io
 from pathlib import Path
+import sys
 
-# Ensure project root is in sys.path
+from PIL import Image
+import streamlit as st
+import streamlit.components.v1 as components
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import streamlit as st
-import streamlit.components.v1 as components
-from PIL import Image
+import src.cv.boundary_overlay as _mod_bo  # noqa: E402
+import src.cv.feature_extractor as _mod_fe  # noqa: E402
+import src.cv.fraud_detector as _mod_fd  # noqa: E402
+import src.cv.material_classifier as _mod_mc  # noqa: E402
+import src.cv.pipeline as _mod_cp  # noqa: E402
+import src.cv.readiness_classifier as _mod_rc  # noqa: E402
+import src.dataset_manager as _mod_dm  # noqa: E402
+import src.engine.decision_engine as _mod_de  # noqa: E402
+import src.gigachat_service as _mod_gp  # noqa: E402
+import src.gigachat_service.service as _mod_gs  # noqa: E402
+import src.ingestion.cadastral_registry as _mod_cr  # noqa: E402
+import src.report as _mod_rp  # noqa: E402
+import src.report.builder as _mod_rb  # noqa: E402
+import src.ui.sber_theme as _mod_st  # noqa: E402
 
-from src.cv.boundary_overlay import BoundaryOverlay
-from src.cv.pipeline import CVPipeline
-from src.dataset import DroneDataset
-from src.dataset_manager import ParcelManager, sanitize_plot_id
-from src.engine.decision_engine import DecisionEngine
-from src.gigachat_service import GigaChatInspectorService, build_inspector_prompt
-from src.ingestion.cadastral_registry import CadastralParcel, CadastralRegistry, normalize_cadastral_id
-from src.ingestion.credit_registry import CreditRegistry
-from src.models.schemas import CreditObject, CVInspectionResult, StrategyRecommendation
-from src.models.strategy import ReportPhotoItem
-from src.report import ActGenerator, build_act_from_cv
+if getattr(sys, "_agentdrone_reloaded_v9", False) is False:
+    for _m in (
+        _mod_st,
+        _mod_de,
+        _mod_gs,
+        _mod_gp,
+        _mod_cr,
+        _mod_fe,
+        _mod_rc,
+        _mod_mc,
+        _mod_fd,
+        _mod_cp,
+        _mod_bo,
+        _mod_dm,
+        _mod_rb,
+        _mod_rp,
+    ):
+        try:
+            importlib.reload(_m)
+        except Exception:
+            pass
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    sys._agentdrone_reloaded_v9 = True  # type: ignore[attr-defined]
 
-# Page configuration
+from src.cv.boundary_overlay import BoundaryOverlay  # noqa: E402
+from src.cv.pipeline import CVPipeline  # noqa: E402
+from src.dataset import DroneDataset  # noqa: E402
+from src.dataset_manager import ParcelManager  # noqa: E402
+from src.engine.decision_engine import DecisionEngine  # noqa: E402
+from src.gigachat_service.service import GigaChatInspectorService  # noqa: E402
+from src.ingestion.cadastral_registry import (  # noqa: E402
+    CadastralParcel,
+    CadastralRegistry,
+    normalize_cadastral_id,
+)
+from src.ingestion.credit_registry import CreditRegistry  # noqa: E402
+from src.models.schemas import (  # noqa: E402
+    CreditObject,
+    CVInspectionResult,
+    DroneImageMeta,
+    StrategyRecommendation,
+)
+from src.models.strategy import ReportPhotoItem  # noqa: E402
+from src.report.builder import build_act_from_cv  # noqa: E402
+from src.report.generator import ActGenerator  # noqa: E402
+from src.ui.sber_theme import (  # noqa: E402
+    get_sber_css,
+    render_kpi_card,
+    render_sber_header,
+)
+
 st.set_page_config(
-    page_title="AgentDrone — Мониторинг залогов БПЛА | Сбер",
-    page_icon="🛸",
+    page_title="АС Калита — Мониторинг залогов ИЖС",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# Custom Styling (Sberbank Green Theme)
-st.markdown(
-    """
-    <style>
-    :root {
-        --sber-green: #21a038;
-        --sber-dark-green: #0f6c24;
-        --sber-light-green: #eaf8ec;
-        --sber-gray: #f4f6f8;
-        --text-dark: #1f2937;
-    }
-    .main-header {
-        background: linear-gradient(135deg, #0e3d19 0%, #176527 50%, #21a038 100%);
-        padding: 20px 24px;
-        border-radius: 12px;
-        color: white;
-        margin-bottom: 24px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-    }
-    .main-header h1 {
-        color: white !important;
-        margin: 0;
-        font-size: 26px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .main-header p {
-        color: #d1fae5 !important;
-        margin: 6px 0 0 0;
-        font-size: 14px;
-    }
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 16px;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.04);
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 24px;
-        font-weight: 700;
-        color: #111827;
-        margin: 4px 0;
-    }
-    .metric-label {
-        font-size: 12px;
-        text-transform: uppercase;
-        color: #6b7280;
-        letter-spacing: 0.5px;
-    }
-    .badge-green {
-        background-color: #dcfce7;
-        color: #15803d;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .badge-yellow {
-        background-color: #fef9c3;
-        color: #854d0e;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .badge-red {
-        background-color: #fee2e2;
-        color: #b91c1c;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .decision-card-green {
-        border-left: 6px solid #22c55e;
-        background: #f0fdf4;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .decision-card-yellow {
-        border-left: 6px solid #eab308;
-        background: #fefce8;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .decision-card-red {
-        border-left: 6px solid #ef4444;
-        background: #fef2f2;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .sber-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        margin-top: 10px;
-    }
-    .sber-table th {
-        background-color: #f3f4f6;
-        color: #374151;
-        font-weight: 600;
-        padding: 10px 12px;
-        text-align: left;
-        border-bottom: 2px solid #e5e7eb;
-    }
-    .sber-table td {
-        padding: 10px 12px;
-        border-bottom: 1px solid #e5e7eb;
-        color: #1f2937;
-    }
-    .sber-table tr:hover {
-        background-color: #f9fafb;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px 6px 0 0;
-        padding: 8px 18px;
-        font-weight: 600;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+
+def _render_html(raw_html: str) -> None:
+    """Render HTML via st.markdown after stripping line indentation to prevent code-block parsing."""
+    compact = "\n".join(line.strip() for line in raw_html.splitlines() if line.strip())
+    st.markdown(compact, unsafe_allow_html=True)
+
+
+def apply_custom_css() -> None:
+    """Apply corporate banking stylesheet and clean layout rules."""
+    _render_html(get_sber_css())
+    _render_html(
+        """
+        <style>
+        .ws-panel {
+            background: #FFFFFF;
+            border: 1px solid #DDE3EA;
+            border-radius: 10px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+        }
+        .ws-panel-header {
+            font-size: 0.82rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #475569;
+            border-bottom: 1px solid #E2E8F0;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .ws-kv-grid {
+            display: grid;
+            grid-template-columns: 165px 1fr;
+            row-gap: 6px;
+            column-gap: 12px;
+            font-size: 0.85rem;
+        }
+        .ws-kv-label {
+            color: #64748B;
+            font-weight: 500;
+        }
+        .ws-kv-val {
+            color: #0F172A;
+            font-weight: 600;
+        }
+        .ws-status-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .ws-status-ok { background: #DCFCE7; color: #166534; }
+        .ws-status-warn { background: #FEF3C7; color: #92400E; }
+        .ws-status-err { background: #FEE2E2; color: #991B1B; }
+        </style>
+        """
+    )
+
+
+def get_available_plot_ids() -> list[str]:
+    """Retrieve list of available cadastral plot IDs on the server."""
+    return ParcelManager.list_plots()
+
+
+def clear_all_caches() -> None:
+    """Clear Streamlit caches and session state after upload/delete operations."""
+    st.cache_data.clear()
+    if "inspected_plots" in st.session_state:
+        st.session_state["inspected_plots"].clear()
+
+
+def handle_delete_plot(plot_id: str) -> None:
+    """Delete a parcel folder and synchronize UI state."""
+    try:
+        deleted = ParcelManager.delete_plot(plot_id)
+        if deleted:
+            CadastralRegistry.remove_from_cache(plot_id)
+            clear_all_caches()
+            if st.session_state.get("selected_plot_id") == plot_id:
+                del st.session_state["selected_plot_id"]
+            st.toast(f"Объект {normalize_cadastral_id(plot_id)} удален с сервера.")
+            st.rerun()
+        else:
+            st.error(f"Не удалось найти папку участка {plot_id} для удаления.")
+    except Exception as exc:
+        st.error(f"Ошибка при удалении участка {plot_id}: {exc}")
+
+
+def handle_delete_all_plots() -> None:
+    """Delete all parcel folders from the server."""
+    try:
+        count = ParcelManager.delete_all_plots()
+        clear_all_caches()
+        if "selected_plot_id" in st.session_state:
+            del st.session_state["selected_plot_id"]
+        st.toast(f"Удалено объектов с сервера: {count}")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Ошибка при очистке объектов: {exc}")
+
+
+def handle_upload_zip(uploaded_zip, target_plot_id: str | None = None) -> None:
+    """Extract a ZIP archive of one or more parcel folders into the dataset root."""
+    if uploaded_zip is None:
+        st.warning("Выберите ZIP-архив для загрузки.")
+        return
+    try:
+        zip_bytes = uploaded_zip.getvalue()
+        effective_target = (
+            target_plot_id.strip()
+            if (target_plot_id and target_plot_id.strip())
+            else getattr(uploaded_zip, "name", None)
+        )
+        extracted_ids = ParcelManager.upload_zip(
+            zip_bytes,
+            target_plot_id=effective_target,
+        )
+        clear_all_caches()
+        if extracted_ids:
+            st.session_state["selected_plot_id"] = extracted_ids[0]
+            st.toast(f"Загружено участков: {len(extracted_ids)} ({', '.join(extracted_ids)})")
+            st.rerun()
+        else:
+            st.warning("Архив не содержит файлов съемки.")
+    except Exception as exc:
+        st.error(f"Ошибка распаковки архива: {exc}")
+
+
+def handle_upload_files(target_plot_id: str, uploaded_files: list) -> None:
+    """Upload individual drone photos / MRK logs into a new or existing parcel folder."""
+    if not target_plot_id or not target_plot_id.strip():
+        st.error("Пожалуйста, укажите кадастровый номер для создаваемой папки.")
+        return
+    if not uploaded_files:
+        st.error("Пожалуйста, выберите файлы съемки для загрузки.")
+        return
+    try:
+        file_tuples = [(f.name, f.getvalue()) for f in uploaded_files]
+        saved_id = ParcelManager.upload_files(target_plot_id.strip(), file_tuples)
+        clear_all_caches()
+        st.session_state["selected_plot_id"] = saved_id
+        st.toast(f"Объект {normalize_cadastral_id(saved_id)} ({len(file_tuples)} файлов) загружен.")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Ошибка сохранения файлов: {exc}")
 
 
 @st.cache_data(show_spinner=False)
-def get_available_plot_ids() -> list[str]:
-    """Retrieve all available cadastral plot IDs."""
-    dataset = DroneDataset()
-    plots = dataset.list_plots()
-    if not plots:
-        return [p.raw_folder_name for p in CadastralRegistry.list_all_parcels()]
-    return plots
-
-
-CACHE_SALT = "v3_ppk_mrk_ms_live"
-
-
-@st.cache_data(show_spinner=False, ttl=60)
 def analyze_single_plot(
     plot_id: str,
-    _cache_ver: str = CACHE_SALT,
-) -> tuple[CVInspectionResult, CreditObject, StrategyRecommendation]:
-    """Execute end-to-end CV and Decision Engine pipeline with caching."""
+) -> tuple[CVInspectionResult, CreditObject | None, StrategyRecommendation]:
+    """Run CV pipeline, Sber GigaChat-2-Max Vision AI Agent, and decision engine for a single plot (cached)."""
+    ds = DroneDataset()
+    plot_dir = ds.root_dir / plot_id
+    parcel = CadastralRegistry.get_parcel(plot_id, fetch_online=True, plot_dir=plot_dir)
     credit_obj = CreditRegistry.get_credit_object(plot_id)
-    cv_result = CVPipeline.analyze_plot(
-        plot_id=plot_id,
-        credit_object=credit_obj,
-        declared_material=credit_obj.declared_wall_material,
-    )
-    decision = DecisionEngine.evaluate(cv_result, credit_obj)
-    return cv_result, credit_obj, decision
+    cv_result = CVPipeline.analyze_plot(plot_id, plot_dir=plot_dir, credit_object=credit_obj)
+    gigachat_srv = GigaChatInspectorService()
+    if gigachat_srv.is_online:
+        gigachat_srv.analyze_plot_with_vision_agent(
+            cv_result=cv_result,
+            credit_obj=credit_obj,
+            parcel=parcel,
+            plot_dir=plot_dir,
+        )
+    decision_result = DecisionEngine.evaluate(cv_result, credit_object=credit_obj)
+    return cv_result, credit_obj, decision_result
 
 
 def build_plot_summary(
     pid: str,
-    inspected: tuple[CVInspectionResult, CreditObject, StrategyRecommendation] | None = None,
+    inspected: tuple[CVInspectionResult, CreditObject | None, StrategyRecommendation] | None = None,
 ) -> dict:
-    """Build summary dictionary for a single plot, either from CV inspection or registry defaults."""
-    parcel = CadastralRegistry.get_parcel(pid)
-    credit = CreditRegistry.get_credit_object(pid)
-
+    """Assemble a summary row for a plot (lazy-loaded if not yet inspected)."""
     if inspected is not None:
-        cv_res, credit_obj, dec = inspected
-        d_lat = (
-            cv_res.geocheck.drone_center_lat
-            if cv_res.geocheck and cv_res.geocheck.drone_center_lat
-            else 55.0
-        )
-        d_lon = (
-            cv_res.geocheck.drone_center_lon
-            if cv_res.geocheck and cv_res.geocheck.drone_center_lon
-            else 83.0
-        )
-        lat = parcel.centroid_lat if parcel else d_lat
-        lon = parcel.centroid_lon if parcel else d_lon
-        if parcel:
-            poly = BoundaryOverlay.calculate_ground_polygon(parcel)
-        elif cv_res.geocheck and cv_res.geocheck.drone_center_lat:
-            dyn_parcel = CadastralParcel(
-                cadastral_id=cv_res.cadastral_id,
-                raw_folder_name=pid,
-                address=credit_obj.address,
-                centroid_lat=d_lat,
-                centroid_lon=d_lon,
-                area_sqm=1000.0,
-                permitted_use="Для индивидуального жилищного строительства (ИЖС)",
-            )
-            poly = BoundaryOverlay.calculate_ground_polygon(dyn_parcel)
-        else:
-            poly = []
-
+        cv_res, cred, dec = inspected
         return {
             "raw_id": pid,
             "cadastral_id": cv_res.cadastral_id,
-            "borrower": credit_obj.borrower_name,
-            "address": parcel.address if parcel else credit_obj.address,
-            "credit_amount": credit_obj.credit_amount_rub,
+            "borrower": cred.borrower_name if cred else "Н/Д",
+            "address": cred.address if cred else "Н/Д",
+            "credit_amount": cred.credit_amount_rub if cred else 0.0,
             "readiness_pct": cv_res.readiness_pct,
             "stage": cv_res.readiness_stage,
             "material": cv_res.detected_material.value,
@@ -260,1296 +293,930 @@ def build_plot_summary(
             "strategy_code": dec.strategy_code,
             "risk_level": dec.risk_level,
             "fraud_flag": cv_res.fraud_risk_flag,
-            "lat": lat,
-            "lon": lon,
-            "polygon": poly,
+            "days_overdue": cred.days_overdue if cred else 0,
             "kalita_status": dec.kalita_status,
-            "days_overdue": credit_obj.days_overdue,
             "is_inspected": True,
         }
 
-    # Lazy-loaded / uninspected plot: fast metadata from registry, no heavy CV processing
-    cad_id = parcel.cadastral_id if parcel else (credit.cadastral_id if credit else normalize_cadastral_id(pid))
-    borrower = credit.borrower_name if credit else "Заемщик не указан"
-    address = parcel.address if parcel else (credit.address if credit else "Адрес не указан")
-    amount = credit.credit_amount_rub if credit else 0.0
-    material = credit.declared_wall_material if credit else "Не указан"
-    overdue = credit.days_overdue if credit else 0
-    lat = parcel.centroid_lat if parcel else 55.0
-    lon = parcel.centroid_lon if parcel else 83.0
-    polygon = BoundaryOverlay.calculate_ground_polygon(parcel) if parcel else []
-
+    cred = CreditRegistry.get_credit_object(pid)
+    parcel = CadastralRegistry.get_parcel(pid, fetch_online=False)
     return {
         "raw_id": pid,
-        "cadastral_id": cad_id,
-        "borrower": borrower,
-        "address": address,
-        "credit_amount": amount,
+        "cadastral_id": (
+            cred.cadastral_id
+            if cred
+            else (parcel.cadastral_id if parcel else normalize_cadastral_id(pid))
+        ),
+        "borrower": cred.borrower_name if cred else "Индивидуальный заемщик ИЖС",
+        "address": cred.address if cred else (parcel.address if parcel else "Н/Д"),
+        "credit_amount": cred.credit_amount_rub if cred else 0.0,
         "readiness_pct": None,
         "stage": "—",
-        "material": f"{material} (по КД)",
-        "strategy": "Ожидает перехода инспектора",
+        "material": cred.declared_wall_material if cred else "Не проверено",
+        "strategy": "Ожидает выбора участка",
         "strategy_code": "ОЖИДАЕТ",
         "risk_level": "PENDING",
         "fraud_flag": False,
-        "lat": lat,
-        "lon": lon,
-        "polygon": polygon,
-        "kalita_status": "Ожидает осмотра",
-        "days_overdue": overdue,
+        "days_overdue": cred.days_overdue if cred else 0,
+        "kalita_status": "Ожидает инспекции",
         "is_inspected": False,
     }
 
 
 def get_portfolio_summary(
-    plot_ids: tuple[str, ...] | list[str],
-    inspected_cache: dict[str, tuple[CVInspectionResult, CreditObject, StrategyRecommendation]],
+    plot_ids: list[str],
+    inspected_map: dict[str, tuple[CVInspectionResult, CreditObject | None, StrategyRecommendation]],
 ) -> list[dict]:
-    """Assemble portfolio list combining inspected plots and pending registry plots."""
-    return [build_plot_summary(pid, inspected_cache.get(pid)) for pid in plot_ids]
+    """Assemble portfolio summary without running CV on unvisited plots."""
+    return [build_plot_summary(pid, inspected=inspected_map.get(pid)) for pid in plot_ids]
 
 
-def analyze_portfolio_summary(
-    plot_ids: tuple[str, ...],
-    _cache_ver: str = CACHE_SALT,
-) -> list[dict]:
-    """Backward-compatible portfolio analysis function."""
+@st.cache_data(show_spinner=False)
+def analyze_portfolio_summary(plot_ids: tuple[str, ...]) -> list[dict]:
+    """Run batch inspection across all plots when explicitly requested by user."""
     summary = []
     for pid in plot_ids:
         try:
-            cv_res, credit, dec = analyze_single_plot(pid)
-            summary.append(build_plot_summary(pid, (cv_res, credit, dec)))
-        except Exception as e:
-            st.warning(f"Ошибка анализа участка {pid}: {e}")
+            inspected = analyze_single_plot(pid)
+            summary.append(build_plot_summary(pid, inspected=inspected))
+        except Exception:
+            continue
     return summary
 
 
-def handle_delete_plot(plot_id: str) -> None:
-    """Delete parcel folder from server and synchronize application state."""
-    try:
-        deleted = ParcelManager.delete_plot(plot_id)
-        if deleted:
-            get_available_plot_ids.clear()
-            analyze_single_plot.clear()
-            st.cache_data.clear()
-            if "inspected_plots" in st.session_state and isinstance(
-                st.session_state.inspected_plots, dict
-            ):
-                st.session_state.inspected_plots.pop(plot_id, None)
-            giga_k = f"giga_summary_{plot_id}"
-            if giga_k in st.session_state:
-                del st.session_state[giga_k]
-            if "last_visited_plot_id" in st.session_state:
-                st.session_state.last_visited_plot_id = None
-            if "plot_select_box" in st.session_state:
-                del st.session_state["plot_select_box"]
-            if "selected_plot_id" in st.session_state:
-                del st.session_state["selected_plot_id"]
-            st.toast(f"Папка участка {normalize_cadastral_id(plot_id)} удалена с сервера!", icon="🗑️")
-            st.rerun()
-        else:
-            st.error(f"Не удалось найти папку участка {plot_id} на сервере.")
-    except Exception as e:
-        st.error(f"Ошибка при удалении папки: {e}")
+@st.cache_data(show_spinner=False)
+def render_cached_boundary_overlay(
+    img_path_str: str,
+    meta_dict: dict | None,
+    parcel_id: str,
+    line_width: int,
+    show_setback: bool = True,
+) -> bytes:
+    """Render and cache JPEG bytes with red cadastral boundary and 3m setback line."""
+    img_path = Path(img_path_str)
+    meta = DroneImageMeta(**meta_dict) if meta_dict else None
+    parcel = CadastralRegistry.get_parcel(parcel_id, fetch_online=False, plot_dir=img_path.parent)
+    if parcel is None:
+        parcel = CadastralParcel(
+            cadastral_id=normalize_cadastral_id(parcel_id),
+            raw_folder_name=parcel_id,
+            address="Участок ИЖС",
+            centroid_lat=meta.latitude if (meta and meta.latitude) else 55.0,
+            centroid_lon=meta.longitude if (meta and meta.longitude) else 83.0,
+            area_sqm=1000.0,
+            permitted_use="Для ИЖС",
+        )
+
+    with Image.open(img_path) as raw_img:
+        overlaid = BoundaryOverlay.apply_boundary_overlay(
+            image=raw_img,
+            meta=meta,
+            parcel=parcel,
+            line_width=line_width,
+            show_setback=show_setback,
+        )
+        overlaid.thumbnail((1400, 1050))
+        buf = io.BytesIO()
+        overlaid.save(buf, format="JPEG", quality=88)
+        return buf.getvalue()
 
 
-def handle_upload_zip(uploaded_zip_file, target_plot_id: str | None = None) -> None:
-    """Extract and deploy an uploaded ZIP archive of parcel folders."""
+def get_base64_image(
+    img_path: Path,
+    apply_overlay: bool = False,
+    meta: DroneImageMeta | None = None,
+    parcel: CadastralParcel | None = None,
+) -> str | None:
+    """Convert image to base64 data URI for embedding into HTML/PDF Act."""
     try:
-        target_id = target_plot_id.strip() if target_plot_id and target_plot_id.strip() else None
-        new_ids = ParcelManager.upload_zip(uploaded_zip_file.getvalue(), target_plot_id=target_id)
-        if new_ids:
-            get_available_plot_ids.clear()
-            analyze_single_plot.clear()
-            st.cache_data.clear()
-            st.session_state["selected_plot_id"] = new_ids[0]
-            st.session_state.last_visited_plot_id = None
-            st.session_state.pop("plot_select_box", None)
-            st.toast(
-                f"Участок {normalize_cadastral_id(new_ids[0])} успешно загружен на сервер!",
-                icon="✅",
+        with Image.open(img_path) as img:
+            if apply_overlay and parcel is not None:
+                img = BoundaryOverlay.apply_boundary_overlay(
+                    image=img,
+                    meta=meta,
+                    parcel=parcel,
+                    line_width=6,
+                )
+            img.thumbnail((860, 645))
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=84)
+            b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        return None
+
+
+def match_shots_to_metadata(
+    rgb_images: list[Path],
+    shots_metadata: list[DroneImageMeta],
+) -> list[tuple[Path, DroneImageMeta | None]]:
+    """Pair each drone photo in the folder with its exact DroneImageMeta by filename."""
+    meta_by_name = {m.filename: m for m in shots_metadata}
+    dji_images = [p for p in rgb_images if "DJI" in p.name.upper()]
+    target_images = dji_images if dji_images else rgb_images
+
+    paired: list[tuple[Path, DroneImageMeta | None]] = []
+    for idx, img_path in enumerate(target_images):
+        meta = meta_by_name.get(img_path.name)
+        if meta is None and idx < len(shots_metadata):
+            meta = shots_metadata[idx]
+        paired.append((img_path, meta))
+    return paired
+
+
+def build_inspection_folium_map(
+    parcel: CadastralParcel | None,
+    shots_meta: list[DroneImageMeta],
+    is_geofence_valid: bool = True,
+) -> str:
+    """Build interactive Leaflet map HTML with Rosreestr polygon and drone RTK markers."""
+    import json
+
+    center_lat = parcel.centroid_lat if parcel else 55.028
+    center_lon = parcel.centroid_lon if parcel else 82.921
+    if not parcel and shots_meta:
+        valid_coords = [
+            (m.latitude, m.longitude)
+            for m in shots_meta
+            if m.latitude is not None and m.longitude is not None
+        ]
+        if valid_coords:
+            center_lat = sum(c[0] for c in valid_coords) / len(valid_coords)
+            center_lon = sum(c[1] for c in valid_coords) / len(valid_coords)
+
+    poly_coords = parcel.polygon_wgs84 if (parcel and parcel.polygon_wgs84) else []
+    markers = []
+    for idx, m in enumerate(shots_meta, start=1):
+        if m.latitude is not None and m.longitude is not None:
+            markers.append(
+                {
+                    "lat": m.latitude,
+                    "lon": m.longitude,
+                    "label": f"Кадр {idx}: {m.filename} ({m.shot_angle.value})",
+                }
             )
-            st.rerun()
-        else:
-            st.warning("В архиве не найдено подходящих файлов или папок участков.")
-    except Exception as e:
-        st.error(f"Ошибка при распаковке архива: {e}")
+
+    poly_json = json.dumps(poly_coords)
+    markers_json = json.dumps(markers, ensure_ascii=False)
+    cad_label = parcel.cadastral_id if parcel else "Контур ЗУ"
+    stroke_color = "#DC2626" if is_geofence_valid else "#B91C1C"
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map {{ margin: 0; padding: 0; width: 100%; height: 440px; border-radius: 6px; }}
+  .cad-tooltip {{
+    background: rgba(15, 23, 42, 0.9); color: #fff; border: 1px solid #DC2626;
+    font-family: sans-serif; font-size: 12px; font-weight: 600; padding: 3px 7px;
+  }}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  const map = L.map('map').setView([{center_lat}, {center_lon}], 18);
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap | ППК Росреестр'
+  }}).addTo(map);
+  const polyCoords = {poly_json};
+  if (polyCoords.length >= 3) {{
+    const poly = L.polygon(polyCoords, {{
+      color: '{stroke_color}', weight: 3, fillColor: '{stroke_color}', fillOpacity: 0.14
+    }}).addTo(map);
+    poly.bindTooltip('Росреестр: {cad_label}', {{permanent: true, className: 'cad-tooltip'}});
+    map.fitBounds(poly.getBounds().pad(0.35));
+  }}
+  const markers = {markers_json};
+  markers.forEach((m, i) => {{
+    L.circleMarker([m.lat, m.lon], {{
+      radius: 6, color: '#0F172A', weight: 2, fillColor: '#2563EB', fillOpacity: 0.95
+    }}).addTo(map).bindPopup(m.label);
+  }});
+</script>
+</body>
+</html>"""
 
 
-def handle_upload_files(plot_id: str, uploaded_files: list) -> None:
-    """Deploy raw drone inspection files into a named parcel folder."""
-    clean_id = sanitize_plot_id(plot_id) if plot_id else ""
-    if not clean_id:
-        st.error("Пожалуйста, укажите кадастровый номер для создаваемой папки.")
-        return
-    if not uploaded_files:
-        st.error("Пожалуйста, выберите файлы съемки для загрузки.")
-        return
-    try:
-        file_payload = [(f.name, f.getvalue()) for f in uploaded_files]
-        saved_id = ParcelManager.upload_files(clean_id, file_payload)
-        get_available_plot_ids.clear()
-        analyze_single_plot.clear()
-        st.cache_data.clear()
-        st.session_state["selected_plot_id"] = saved_id
-        st.session_state.last_visited_plot_id = None
-        st.session_state.pop("plot_select_box", None)
-        st.toast(f"Папка {normalize_cadastral_id(saved_id)} сохранена на сервере!", icon="✅")
-        st.rerun()
-    except Exception as e:
-        st.error(f"Ошибка при сохранении файлов: {e}")
-
-
-def main():
+def main() -> None:
+    apply_custom_css()
     plot_ids = get_available_plot_ids()
 
-    # Session state for inspected plots cache & active tracking
     if "inspected_plots" not in st.session_state:
-        st.session_state.inspected_plots = {}
-    if "last_visited_plot_id" not in st.session_state:
-        st.session_state.last_visited_plot_id = None
+        st.session_state["inspected_plots"] = {}
 
-    if not plot_ids:
-        st.markdown(
-            """
-            <div class="main-header">
-                <h1>🛸 AgentDrone — Мониторинг залогов БПЛА</h1>
-                <p>Сибирский банк ПАО Сбербанк • Центр залогового мониторинга & АС «Калита»</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    gigachat_probe = GigaChatInspectorService()
+
+    # Top System Header
+    _render_html(
+        render_sber_header(
+            active_objects_count=len(plot_ids),
+            rtk_status="FIX Q=16",
+            giga_status="GigaChat API Онлайн" if gigachat_probe.is_online else "GigaChat Оффлайн",
+            giga_online=gigachat_probe.is_online,
         )
-        st.warning("⚠️ В каталоге на сервере отсутствуют доступные папки с участками.")
-        st.subheader("📤 Загрузите первую папку участка на сервер")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("#### 📦 Загрузить ZIP-архив участка")
-            ezip = st.file_uploader("Архив (.zip):", type=["zip"], key="empty_zip")
-            ecad = st.text_input("Кадастровый номер (опционально):", key="empty_cad")
-            if st.button("🚀 Загрузить архив", type="primary", key="empty_btn_zip"):
-                if ezip:
-                    handle_upload_zip(ezip, ecad)
-                else:
-                    st.error("Выберите ZIP-файл")
-        with c2:
-            st.markdown("#### 📄 Загрузить файлы съемки")
-            efcad = st.text_input("Кадастровый номер (обязательно):", key="empty_fcad")
-            effiles = st.file_uploader(
-                "Файлы съемки:", accept_multiple_files=True, key="empty_ffiles"
+    )
+
+    # Sidebar: Object Selection, Upload & Deletion, Overlay Settings
+    with st.sidebar:
+        st.markdown("### Объекты мониторинга")
+
+        if plot_ids:
+            plot_labels = {}
+            for pid in plot_ids:
+                cred = CreditRegistry.get_credit_object(pid)
+                cad_str = cred.cadastral_id if cred else normalize_cadastral_id(pid)
+                is_done = pid in st.session_state["inspected_plots"]
+                status_tag = "[Проверен]" if is_done else ""
+                borrower_short = (cred.borrower_name.split()[0] if cred else "Объект ИЖС")
+                plot_labels[pid] = f"{cad_str} — {borrower_short} {status_tag}".strip()
+
+            default_idx = 0
+            if (
+                "selected_plot_id" in st.session_state
+                and st.session_state["selected_plot_id"] in plot_ids
+            ):
+                default_idx = plot_ids.index(st.session_state["selected_plot_id"])
+
+            selected_plot_id = st.selectbox(
+                "Выберите кадастровый участок:",
+                options=plot_ids,
+                format_func=lambda x: plot_labels.get(x, x),
+                index=default_idx,
             )
-            if st.button("💾 Сохранить файлы", type="primary", key="empty_btn_files"):
-                handle_upload_files(efcad, effiles)
+            st.session_state["selected_plot_id"] = selected_plot_id
+
+            col_del1, col_del2 = st.columns(2)
+            with col_del1:
+                if st.button("Удалить участок", use_container_width=True):
+                    handle_delete_plot(selected_plot_id)
+            with col_del2:
+                if st.button("Очистить все", use_container_width=True):
+                    handle_delete_all_plots()
+        else:
+            selected_plot_id = None
+            st.info("На сервере нет загруженных объектов. Загрузите свой участок ниже.")
+
+        st.markdown("---")
+        st.markdown("### Параметры разметки ЗУ")
+        show_boundary = st.checkbox("Красная линия границы ЗУ (Росреестр)", value=True)
+        show_setback = st.checkbox("Отступ застройки 3.0 м (СП 53.13330)", value=True)
+        boundary_width = st.slider("Толщина линий (px)", min_value=3, max_value=12, value=6)
+
+        st.markdown("---")
+        with st.expander("Загрузить новый объект (JPG / ZIP)", expanded=not bool(plot_ids)):
+            upload_mode = st.radio(
+                "Формат загрузки:",
+                options=["Файлы съемки (JPG + MRK)", "ZIP-архив участка"],
+                horizontal=False,
+            )
+            if upload_mode == "Файлы съемки (JPG + MRK)":
+                new_cad_id = st.text_input(
+                    "Кадастровый номер ЗУ:",
+                    placeholder="54:19:164603:3847",
+                    help="Геометрия и реквизиты участка запрашиваются из Росреестра / НСПД",
+                )
+                new_files = st.file_uploader(
+                    "Снимки БПЛА (.JPG) и телеметрия (.MRK):",
+                    type=["jpg", "jpeg", "tif", "tiff", "mrk", "obs", "nav", "txt"],
+                    accept_multiple_files=True,
+                    key="sb_files_uploader",
+                )
+                if st.button("Загрузить объект на сервер", type="primary", use_container_width=True):
+                    handle_upload_files(new_cad_id, new_files)
+            else:
+                zip_cad_id = st.text_input(
+                    "Кадастровый номер (необязательно):",
+                    placeholder="54:07:055001:178",
+                    key="sb_zip_cad",
+                )
+                up_zip = st.file_uploader(
+                    "ZIP-архив папки полета:",
+                    type=["zip"],
+                    key="sb_zip_uploader",
+                )
+                if st.button("Распаковать ZIP на сервер", type="primary", use_container_width=True):
+                    handle_upload_zip(up_zip, target_plot_id=zip_cad_id)
+
+        with st.expander("Настройки GigaChat API", expanded=False):
+            st.caption(
+                "Статус: Подключен ключ Сбер API (.env)"
+                if gigachat_probe.is_online
+                else "Статус: Автономный режим"
+            )
+            gigachat_key = st.text_input(
+                "Переопределить ключ GigaChat API:",
+                type="password",
+                help="По умолчанию используется GIGACHAT_CREDENTIALS из .env",
+            )
+
+    # Empty state when all plots are deleted by user
+    if not selected_plot_id:
+        _render_html(
+            """
+            <div class="ws-panel">
+                <div class="ws-panel-header">Загрузка пользовательских объектов ИЖС</div>
+                <p style="color:#334155; font-size:0.95rem; margin-bottom:8px;">
+                    Сервер готов к приему данных. Укажите кадастровый номер земельного участка и загрузите
+                    снимки с дрона (<code>DJI_*.JPG</code>, <code>*.MRK</code>) или ZIP-архив через панель слева.
+                </p>
+                <p style="color:#64748B; font-size:0.85rem; margin:0;">
+                    При загрузке система автоматически запрашивает координаты поворотных точек, площадь,
+                    адрес и ВРИ участка в базе ППК Росреестр / ФГИС ЕЦП НСПД и проецирует красную линию
+                    границы на все аэрофотоснимки.
+                </p>
+            </div>
+            """
+        )
         return
 
-    # Sidebar: Logo & Navigation
-    st.sidebar.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Sberbank_Logo_2020.svg/320px-Sberbank_Logo_2020.svg.png",
-        width=160,
+    # Run inspection for the active plot on demand
+    with st.spinner(f"Анализ участка {normalize_cadastral_id(selected_plot_id)}..."):
+        cv_result, credit_obj, decision_result = analyze_single_plot(selected_plot_id)
+        st.session_state["inspected_plots"][selected_plot_id] = (
+            cv_result,
+            credit_obj,
+            decision_result,
+        )
+
+    ds = DroneDataset()
+    plot = ds.get_plot(selected_plot_id)
+    parcel = CadastralRegistry.get_parcel(
+        selected_plot_id, fetch_online=True, plot_dir=plot.dir_path
     )
-    st.sidebar.title("Навигация")
+    paired_shots = match_shots_to_metadata(plot.rgb_images, cv_result.shots_metadata)
 
-    filter_risk = st.sidebar.selectbox(
-        "Фильтр по статусу риска:",
-        [
-            f"Все объекты ({len(plot_ids)})",
-            "Только проверенные",
-            "Ожидают проверки",
-            "Только с рисками / Stop-Fraud",
-            "Без рисков (ОК)",
-        ],
-    )
+    # Top KPI Strip (4 strict corporate cards)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        _render_html(
+            render_kpi_card(
+                title="Кадастровый номер ЗУ",
+                value=cv_result.cadastral_id,
+                subtext=f"Площадь Росреестр: {parcel.area_sqm:,.0f} м²" if parcel else "Данные БПЛА",
+                icon_type="satellite",
+                is_success=cv_result.geocheck.is_geofence_valid,
+                is_danger=not cv_result.geocheck.is_geofence_valid,
+            )
+        )
+    with k2:
+        _render_html(
+            render_kpi_card(
+                title="Стадия и готовность (CV)",
+                value=f"{cv_result.readiness_pct}% (Стадия {cv_result.readiness_stage}%)",
+                subtext=cv_result.stage_title,
+                icon_type="chart",
+                is_success=(cv_result.readiness_stage == 100),
+                is_warning=(cv_result.readiness_stage == 50),
+            )
+        )
+    with k3:
+        _render_html(
+            render_kpi_card(
+                title="Материал стен / Конструктив",
+                value=cv_result.detected_material.value,
+                subtext=(
+                    f"План по договору: {credit_obj.declared_wall_material if credit_obj else 'ИЖС'} "
+                    f"(достоверность {int(cv_result.material_confidence * 100)}%)"
+                ),
+                icon_type="drone",
+                is_success=not cv_result.fraud_risk_flag,
+                is_danger=cv_result.fraud_risk_flag,
+            )
+        )
+    with k4:
+        _render_html(
+            render_kpi_card(
+                title="Решение Decision Engine",
+                value=decision_result.strategy_code,
+                subtext=decision_result.strategy.value,
+                icon_type="shield_alert" if cv_result.fraud_risk_flag else "check_circle",
+                is_success=(decision_result.risk_level == "LOW"),
+                is_warning=(decision_result.risk_level in ("MEDIUM", "HIGH")),
+                is_danger=(decision_result.risk_level == "CRITICAL"),
+            )
+        )
 
-    # Initial portfolio data assembly to evaluate filter
-    portfolio_data = get_portfolio_summary(plot_ids, st.session_state.inspected_plots)
-
-    filtered_plots = []
-    for item in portfolio_data:
-        if filter_risk == "Только проверенные" and not item["is_inspected"]:
-            continue
-        if filter_risk == "Ожидают проверки" and item["is_inspected"]:
-            continue
-        if filter_risk == "Только с рисками / Stop-Fraud" and item["risk_level"] != "CRITICAL":
-            continue
-        if filter_risk == "Без рисков (ОК)" and (not item["is_inspected"] or item["risk_level"] != "LOW"):
-            continue
-        filtered_plots.append(item["raw_id"])
-
-    if not filtered_plots:
-        filtered_plots = plot_ids
-
-    # 1. Safely resolve which plot is currently chosen
-    if "selected_plot_id" not in st.session_state or st.session_state["selected_plot_id"] not in filtered_plots:
-        st.session_state["selected_plot_id"] = filtered_plots[0]
-
-    current_target_id = st.session_state["selected_plot_id"]
-
-    # 2. Navigation trigger: update plot ONLY when user navigates to it ("переходит")
-    is_new_navigation = (st.session_state.get("last_visited_plot_id") != current_target_id)
-    is_not_inspected = (current_target_id not in st.session_state.inspected_plots)
-
-    if is_new_navigation or is_not_inspected:
-        with st.spinner(f"🛸 Обновление данных БПЛА по участку {normalize_cadastral_id(current_target_id)}..."):
-            cv_result, credit_obj, decision = analyze_single_plot(current_target_id)
-            st.session_state.inspected_plots[current_target_id] = (cv_result, credit_obj, decision)
-            st.session_state.last_visited_plot_id = current_target_id
-    else:
-        cv_result, credit_obj, decision = st.session_state.inspected_plots[current_target_id]
-
-    # 3. Synchronize portfolio_data with the freshly inspected plot
-    portfolio_data = get_portfolio_summary(plot_ids, st.session_state.inspected_plots)
-
-    def make_plot_label(raw_id: str) -> str:
-        row = next((r for r in portfolio_data if r["raw_id"] == raw_id), None)
-        norm_id = normalize_cadastral_id(raw_id)
-        if row and row["is_inspected"]:
-            risk_icon = "🔴" if row["risk_level"] == "CRITICAL" else ("🟡" if row["risk_level"] == "MEDIUM" else "🟢")
-            readiness = f"{row['readiness_pct']:.0f}%" if row.get("readiness_pct") is not None else "0%"
-            return f"{risk_icon} {norm_id} ({row['borrower'].split()[0]}, {readiness})"
-        elif row:
-            return f"⚪ {norm_id} ({row['borrower'].split()[0]} — ожидает)"
-        return norm_id
-
-    # 4. Callback on selectbox change
-    def on_plot_change():
-        st.session_state["selected_plot_id"] = st.session_state["plot_select_box"]
-
-    current_idx = filtered_plots.index(current_target_id) if current_target_id in filtered_plots else 0
-    selected_raw_id = st.sidebar.selectbox(
-        "Выберите кадастровый участок:",
-        filtered_plots,
-        index=current_idx,
-        format_func=make_plot_label,
-        key="plot_select_box",
-        on_change=on_plot_change,
-    )
-    selected_raw_id = current_target_id
-
-    # Header Banner
-    st.markdown(
-        """
-        <div class="main-header">
-            <h1>🛸 AgentDrone — Мониторинг залогов БПЛА</h1>
-            <p>Сибирский банк ПАО Сбербанк • Центр залогового мониторинга & АС «Калита» • ИИ-инспекция ИЖС</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Top KPI Metrics bar
-    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-    total_portfolio_rub = sum(d["credit_amount"] for d in portfolio_data)
-    inspected_items = [d for d in portfolio_data if d.get("is_inspected")]
-    inspected_count = len(inspected_items)
-    avg_readiness = (
-        sum(d["readiness_pct"] for d in inspected_items if d["readiness_pct"] is not None) / inspected_count
-    ) if inspected_count > 0 else 0.0
-    fraud_count = sum(1 for d in inspected_items if d["fraud_flag"])
-    auto_approved = sum(1 for d in inspected_items if d["strategy_code"] == "STRAT-01")
-
-    with col_m1:
-        st.markdown(
+    # Alert Banner if Stop-Fraud triggered
+    if cv_result.fraud_risk_flag:
+        reasons_html = "".join(f"<li>{r}</li>" for r in cv_result.fraud_reasons)
+        _render_html(
             f"""
-            <div class="metric-card">
-                <div class="metric-label">Объектов на мониторинге</div>
-                <div class="metric-value">{inspected_count} / {len(portfolio_data)}</div>
-                <div style="font-size:12px; color:#15803d;">● Проверено по переходу</div>
+            <div class="sber-fraud-alert">
+                <div class="sber-fraud-title">
+                    СТОП-ФРОД: ВЫЯВЛЕНЫ КРИТИЧЕСКИЕ НАРУШЕНИЯ ОБЕСПЕЧЕНИЯ ({cv_result.cadastral_id})
+                </div>
+                <ul style="margin:4px 0 0 18px; padding:0; font-size:0.86rem;">
+                    {reasons_html}
+                </ul>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col_m2:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Сумма кредитного портфеля</div>
-                <div class="metric-value">{total_portfolio_rub / 1_000_000:.1f} млн ₽</div>
-                <div style="font-size:12px; color:#6b7280;">Обеспечение: 100%</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col_m3:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Средняя готовность объектов</div>
-                <div class="metric-value">{avg_readiness:.1f}%</div>
-                <div style="font-size:12px; color:#2563eb;">По проверенным ({inspected_count})</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col_m4:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Алерты Stop-Fraud</div>
-                <div class="metric-value" style="color: {'#b91c1c' if fraud_count > 0 else '#15803d'};">
-                    {fraud_count}
-                </div>
-                <div style="font-size:12px; color: {'#b91c1c' if fraud_count > 0 else '#15803d'};">
-                    {'⚠️ Требуется блокировка' if fraud_count > 0 else '● Фрод не обнаружен'}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with col_m5:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Авто-выдача траншей</div>
-                <div class="metric-value" style="color: #15803d;">{auto_approved}</div>
-                <div style="font-size:12px; color:#15803d;">Без ручного выезда</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.write("")
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📡 Телеметрия и Сервисы")
-    st.sidebar.markdown(
-        """
-        - **БПЛА:** DJI Mavic 3 Enterprise / M3M
-        - **Позиционирование:** RTK / PPK (Q=16 сантиметровый)
-        - **Кадастр:** Росреестр НСО (Центроиды, ВРИ)
-        - **Интеграция:** АС «Калита» (Шлюз активен)
-        - **AI Ядро:** OpenCV + Heuristic Risk Matrix
-        - **Режим обновления:** по переходу на участок
-        - **LLM / GenAI:** GigaChat API (Сбер)
-        """
-    )
-
-    # GigaChat service initialization
-    giga_service = GigaChatInspectorService()
-    giga_status = giga_service.get_mode_status()
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🤖 Sber GigaChat API")
-    if giga_status["is_online"]:
-        st.sidebar.success(f"🟢 {giga_status['mode']}\nМодель: {giga_status['model']}")
-    else:
-        st.sidebar.info(f"🟡 {giga_status['mode']}\nАвтономный экспертный шаблонизатор")
-
-    with st.sidebar.expander("⚙️ Настройки GigaChat API"):
-        giga_key_input = st.text_input(
-            "Authorization Key (Base64 ClientID:Secret):",
-            type="password",
-            key="giga_custom_token",
-            help="Введите токен Сбер ID для прямого инференса GigaChat",
-        )
-        if giga_key_input:
-            if giga_service.set_credentials(giga_key_input):
-                st.success("✅ GigaChat API успешно подключен!")
-            else:
-                st.warning("⚠️ Ошибка авторизации. Работает Fallback-режим.")
-
-    st.sidebar.markdown("---")
-    c_btn1, c_btn2 = st.sidebar.columns(2)
-    with c_btn1:
-        if st.button("🔄 Обновить этот", use_container_width=True, help="Принудительно пересчитать данные выбранного участка"):
-            analyze_single_plot.clear(selected_raw_id)
-            cv_result, credit_obj, decision = analyze_single_plot(selected_raw_id)
-            st.session_state.inspected_plots[selected_raw_id] = (cv_result, credit_obj, decision)
-            giga_key = f"giga_summary_{selected_raw_id}"
-            if giga_key in st.session_state:
-                del st.session_state[giga_key]
-            st.toast(f"Участок {normalize_cadastral_id(selected_raw_id)} обновлен!", icon="✅")
-            st.rerun()
-    with c_btn2:
-        if st.button("🗑️ Сбросить всё", use_container_width=True, help="Очистить весь кэш и историю проверок"):
-            st.cache_data.clear()
-            st.session_state.inspected_plots = {}
-            st.session_state.last_visited_plot_id = None
-            if "selected_plot_id" in st.session_state:
-                del st.session_state["selected_plot_id"]
-            if "plot_select_box" in st.session_state:
-                del st.session_state["plot_select_box"]
-            st.rerun()
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📁 Управление участками")
-
-    with st.sidebar.expander("📤 Загрузить участок на сервер", expanded=False):
-        sb_mode = st.radio(
-            "Формат загрузки:",
-            ["Архив .ZIP", "Файлы съемки"],
-            key="sb_up_mode",
-            horizontal=True,
-        )
-        if sb_mode == "Архив .ZIP":
-            sb_zip = st.file_uploader(
-                "Архив участка (.zip):",
-                type=["zip"],
-                key="sb_zip_file",
-                help="Архив с папкой участка (DJI JPG, Timestamp.MRK, PPK-файлы)",
-            )
-            sb_cad = st.text_input(
-                "Кадастровый номер (опционально):",
-                key="sb_zip_cad",
-                placeholder="5407055001178",
-            )
-            if st.button("🚀 Загрузить архив", use_container_width=True, key="sb_btn_zip"):
-                if sb_zip:
-                    handle_upload_zip(sb_zip, sb_cad)
-                else:
-                    st.error("Выберите ZIP-файл")
-        else:
-            sb_cad_files = st.text_input(
-                "Кадастровый номер (обязательно):",
-                key="sb_files_cad",
-                placeholder="5407055001178",
-            )
-            sb_files = st.file_uploader(
-                "Файлы съемки:",
-                accept_multiple_files=True,
-                key="sb_raw_files",
-            )
-            if st.button("💾 Сохранить файлы", use_container_width=True, key="sb_btn_files"):
-                handle_upload_files(sb_cad_files, sb_files)
-
-    with st.sidebar.expander("🗑️ Удалить участок с сервера", expanded=False):
-        if plot_ids:
-            del_target = st.selectbox(
-                "Участок для удаления:",
-                plot_ids,
-                index=plot_ids.index(selected_raw_id) if selected_raw_id in plot_ids else 0,
-                format_func=lambda pid: f"{normalize_cadastral_id(pid)} ({pid})",
-                key="sb_del_select",
-            )
-            stats_del = ParcelManager.get_plot_stats(del_target)
-            st.caption(
-                f"📁 Файлов: {stats_del['total_files']} | Размер: {stats_del['size_mb']} МБ"
-            )
-            confirm_del = st.checkbox(
-                "Подтверждаю удаление папки с сервера",
-                key="sb_confirm_del_cb",
-            )
-            if st.button(
-                "❌ Удалить выбранный участок",
-                disabled=not confirm_del,
-                use_container_width=True,
-                key="sb_btn_delete",
-            ):
-                handle_delete_plot(del_target)
-        else:
-            st.info("Нет участков для удаления")
-
-    # Main Tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🛸 Инспекция БПЛА & CV Анализ",
-        "🗺️ ГИС-карта залогов НСО",
-        "📊 Портфельный мониторинг & ROI",
-        "📑 Акт проверки залога (Приложение 1)",
-        "📁 Управление датасетом (Загрузка / Удаление)",
-    ])
-
-    # =========================================================================
-    # TAB 1: INSPECTION CARD
-    # =========================================================================
-    with tab1:
-        parcel = CadastralRegistry.get_parcel(selected_raw_id)
-
-        # Header for the selected plot
-        c_title, c_del, c_badge = st.columns([3, 1, 1])
-        with c_title:
-            st.subheader(f"Участок: {cv_result.cadastral_id}")
-            address_str = parcel.address if parcel else credit_obj.address
-            st.caption(
-                f"📍 {address_str} | Заемщик: **{credit_obj.borrower_name}** | "
-                f"Договор: **{credit_obj.credit_agreement_number}**"
-            )
-        with c_del:
-            with st.popover("🗑️ Удалить участок", help="Удалить эту папку участка с сервера"):
-                st.warning(f"Удалить папку участка {cv_result.cadastral_id}?")
-                p_stats = ParcelManager.get_plot_stats(selected_raw_id)
-                st.write(f"• Файлов на сервере: **{p_stats['total_files']}**")
-                st.write(f"• Размер на диске: **{p_stats['size_mb']} МБ**")
-                st.write(f"• Путь: `{p_stats['dir_path']}`")
-                if st.button("⚠️ Подтверждаю удаление", type="primary", key="tab1_btn_del_confirm"):
-                    handle_delete_plot(selected_raw_id)
-        with c_badge:
-            if decision.risk_level == "CRITICAL":
-                st.markdown(
-                    "<div style='text-align:right;'><span class='badge-red'>КРИТИЧЕСКИЙ РИСК / СБ</span></div>",
-                    unsafe_allow_html=True,
-                )
-            elif decision.risk_level == "MEDIUM":
-                st.markdown(
-                    "<div style='text-align:right;'><span class='badge-yellow'>ТРЕБУЕТ ВНИМАНИЯ</span></div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    "<div style='text-align:right;'><span class='badge-green'>БЕЗ РИСКА / СОГЛАСОВАНО</span></div>",
-                    unsafe_allow_html=True,
-                )
-
-        st.write("")
-
-        # 4 Inspection Metric Cards
-        col_i1, col_i2, col_i3, col_i4 = st.columns(4)
-        with col_i1:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Готовность объекта</div>
-                    <div class="metric-value">{cv_result.readiness_pct:.1f}%</div>
-                    <div style="font-size:12px; color:#15803d; font-weight:600;">{cv_result.stage_title}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.progress(min(max(cv_result.readiness_pct / 100.0, 0.0), 1.0))
-        with col_i2:
-            geo_status = "ПОДТВЕРЖДЕНО" if cv_result.geocheck.is_correct_plot else "НАРУШЕНИЕ"
-            geo_color = "#15803d" if cv_result.geocheck.is_correct_plot else "#b91c1c"
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Геовалидация (RTK)</div>
-                    <div class="metric-value" style="color: {geo_color};">{geo_status}</div>
-                    <div style="font-size:12px; color:#6b7280;">Смещение: {cv_result.geocheck.distance_to_cadastre_m:.1f} м (допуск 75м)</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col_i3:
-            mat_name = cv_result.detected_material.value
-            declared_mat = credit_obj.declared_wall_material
-            mat_color = "#15803d" if mat_name in declared_mat or "жилой" in declared_mat.lower() else "#b91c1c"
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Материал стен (CV)</div>
-                    <div class="metric-value" style="font-size:18px; color:{mat_color};">{mat_name}</div>
-                    <div style="font-size:12px; color:#6b7280;">В договоре: {declared_mat}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col_i4:
-            comp = cv_result.completeness
-            comp_badge = (
-                "4 фасада + 2 надира"
-                if comp.is_fully_compliant
-                else f"{comp.facades_count} фас. / {comp.nadir_count} над."
-            )
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Ракурсы съемки</div>
-                    <div class="metric-value" style="font-size:18px; color:#2563eb;">{comp_badge}</div>
-                    <div style="font-size:12px; color:#6b7280;">Всего кадров БПЛА: {cv_result.analyzed_images_count}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        st.write("")
-
-        # DECISION ENGINE CARD
-        card_class = (
-            "decision-card-red"
-            if decision.risk_level == "CRITICAL"
-            else ("decision-card-yellow" if decision.risk_level == "MEDIUM" else "decision-card-green")
-        )
-        st.markdown(
-            f"""
-            <div class="{card_class}">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:18px;">
-                        🎯 Решение Банка: {decision.strategy_code} — {decision.strategy.value}
-                    </h3>
-                    <span style="font-weight:700; font-size:14px;">Статус АС Калита: <code>{decision.kalita_status}</code></span>
-                </div>
-                <p style="margin: 8px 0 4px 0; font-size:14px; font-weight:600;">{decision.action_required}</p>
-                <div style="font-size:13px; color:#4b5563; margin-top:6px;">
-                    <strong>Обоснование решения:</strong>
-                    <ul style="margin:4px 0 0 16px; padding:0;">
-                        {''.join(f'<li>{r}</li>' for r in decision.reasoning)}
-                    </ul>
-                </div>
-                <div style="margin-top:8px; font-size:12px; color:#6b7280;">
-                    <strong>Юридическое основание:</strong> {decision.legal_basis} |
-                    <strong>Финансовый эффект:</strong> {decision.financial_impact_rub:,.0f} ₽
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Action Buttons
-        col_act1, col_act2, col_act3 = st.columns([2, 2, 3])
-        with col_act1:
-            if st.button("✅ Утвердить решение в АС «Калита»", use_container_width=True, type="primary"):
-                st.success(
-                    f"Решение [{decision.strategy_code}] успешно передано в АС «Калита». "
-                    f"Номер транзакции: KAL-2026-{selected_raw_id[-5:]}"
-                )
-        with col_act2:
-            if st.button("📄 Сформировать Акт проверки залога", use_container_width=True):
-                st.info("Акт проверки залога (Приложение 1) сгенерирован и доступен на вкладке «Акт проверки залога».")
-        with col_act3:
-            st.caption("ℹ️ Все транзакции заверяются усиленной квалифицированной ЭЦП инспектора залогов.")
-
-        # GigaChat AI Inspector Summary Card
-        st.write("")
-        st.subheader("🤖 Экспертное AI-заключение GigaChat (Сбер) для АС «Калита»")
-
-        giga_key = f"giga_summary_{selected_raw_id}"
-        if giga_key not in st.session_state:
-            st.session_state[giga_key] = giga_service.generate_summary_for_ui(cv_result, credit_obj, decision)
-
-        col_g1, col_g2 = st.columns([3, 1])
-        with col_g2:
-            if st.button("⚡ Обновить через GigaChat", key=f"btn_regen_{selected_raw_id}", use_container_width=True):
-                with st.spinner("Запрос к модели GigaChat Сбера..."):
-                    st.session_state[giga_key] = giga_service.generate_summary_for_ui(cv_result, credit_obj, decision)
-                st.success("Резюме обновлено!")
-
-        current_summary = st.session_state[giga_key]
-        status_info = giga_service.get_mode_status()
-        status_badge = "🟢 GigaChat API (Сбер)" if status_info["is_online"] else "🟡 Оффлайн-шаблонизатор (Fallback)"
-
-        st.markdown(
-            f"""
-            <div style="background:#f0fdf4; border-left:5px solid #21a038; border-radius:6px; padding:14px; margin-bottom:12px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <strong style="color:#15803d; font-size:14px;">Заключение инспектора залоговой службы:</strong>
-                    <span style="font-size:12px; background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:12px; font-weight:600;">
-                        {status_badge}
-                    </span>
-                </div>
-                <div style="font-size:13.5px; line-height:1.5; color:#1f2937; white-space:pre-line;">
-                    {current_summary}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        with st.expander("🔍 Посмотреть структурированный JSON-промпт для GigaChat"):
-            st.code(build_inspector_prompt(credit_obj, cv_result, decision), language="json")
-
-        st.markdown("---")
-
-        # Two Columns: Structural Breakdown vs Drone Imagery
-        col_struct, col_photos = st.columns([1, 1])
-
-        with col_struct:
-            st.subheader("🏗️ Анализ конструктивных элементов (Веса Банка)")
-            elems = cv_result.structural_elements
-
-            st.write(
-                f"**1. Фундамент (вес 15%):** {'✅ Выполнен' if elems.has_foundation else '❌ Отсутствует'} "
-                f"({elems.foundation_confidence*100:.1f}%)"
-            )
-            st.progress(elems.foundation_confidence)
-
-            st.write(
-                f"**2. Несущие стены (вес 40%):** {'✅ Возведены' if elems.has_walls else '❌ Отсутствуют'} "
-                f"({elems.walls_confidence*100:.1f}%)"
-            )
-            st.progress(elems.walls_confidence)
-
-            st.write(
-                f"**3. Кровельная система (вес 30%):** {'✅ Смонтирована' if elems.has_roof else '❌ Отсутствует'} "
-                f"({elems.roof_confidence*100:.1f}%)"
-            )
-            st.progress(elems.roof_confidence)
-
-            st.write(
-                f"**4. Контур, окна и двери (вес 15%):** "
-                f"{'✅ Остеклен/Закрыт' if elems.has_windows_doors else '❌ Не закрыт'} "
-                f"({elems.windows_doors_confidence*100:.1f}%)"
-            )
-            st.progress(elems.windows_doors_confidence)
-
-            # Defects and Alerts
-            if cv_result.fraud_reasons or cv_result.defects_detected:
-                st.subheader("⚠️ Выявленные отклонения и дефекты")
-                for reason in cv_result.fraud_reasons:
-                    st.error(f"🚨 **Stop-Fraud:** {reason}")
-                for defect in cv_result.defects_detected:
-                    st.warning(f"⚠️ **Дефект:** {defect}")
-
-        with col_photos:
-            st.subheader("📷 Ракурсы съемки БПЛА")
-
-            c_chk, c_opt = st.columns([3, 2])
-            with c_chk:
-                show_boundary = st.checkbox(
-                    "🔴 Граница участка (красная линия)",
-                    value=True,
-                    help="Проекция кадастровой границы Росреестра на плоскость снимка с учетом RTK телеметрии",
-                )
-            with c_opt:
-                boundary_thickness = st.select_slider(
-                    "Толщина линии:",
-                    options=[2, 4, 6, 8],
-                    value=4,
-                )
-
-            dataset = DroneDataset()
-            images = []
-            try:
-                plot_data = dataset.get_plot(selected_raw_id)
-                images = plot_data.rgb_images
-            except Exception:
-                images = []
-
-            if images:
-                shot_tabs = st.tabs([f"Кадр {i+1}" for i in range(min(len(images), 4))])
-                for idx, tab in enumerate(shot_tabs):
-                    with tab:
-                        img_path = images[idx]
-                        try:
-                            pil_img = Image.open(img_path)
-                            meta = cv_result.shots_metadata[idx] if idx < len(cv_result.shots_metadata) else None
-
-                            if show_boundary and parcel is not None:
-                                display_img = BoundaryOverlay.apply_boundary_overlay(
-                                    image=pil_img,
-                                    meta=meta,
-                                    parcel=parcel,
-                                    line_color=(255, 30, 30),
-                                    line_width=boundary_thickness,
-                                    fill_opacity=0.15,
-                                    show_badge=True,
-                                )
-                                caption_prefix = "🔴 Кадастровая граница ЗУ: "
-                            else:
-                                display_img = pil_img
-                                caption_prefix = ""
-
-                            st.image(
-                                display_img,
-                                caption=f"{caption_prefix}{img_path.name}",
-                                use_container_width=True,
-                            )
-                            if meta:
-                                shot_val = getattr(meta.shot_angle, 'value', str(meta.shot_angle))
-                                cap_lines = [
-                                    f"Ракурс: **{shot_val}** | Высота: {meta.altitude_rel_m or 0:.1f}м | "
-                                    f"Pitch: {meta.gimbal_pitch_deg or 0:.1f}° | RTK: **{meta.rtk_status or 'RTK_FIX'}**"
-                                ]
-                                h_acc = getattr(meta, 'horizontal_accuracy_m', None)
-
-                                if h_acc is not None:
-
-                                    std_lat = getattr(meta, 'std_lat_m', 0.0) or 0.0
-
-                                    std_lon = getattr(meta, 'std_lon_m', 0.0) or 0.0
-
-                                    std_hgt = getattr(meta, 'std_hgt_m', 0.0) or 0.0
-
-                                    cap_lines.append(
-
-                                        f"🎯 **Метрология MRK:** СКО горизонтали **±{h_acc*100:.1f} см** "
-
-                                        f"(Lat: ±{std_lat*100:.1f} см, Lon: ±{std_lon*100:.1f} см, "
-
-                                        f"Hgt: ±{std_hgt*100:.1f} см)"
-
-                                    )
-
-                                ant = getattr(meta, 'antenna_offset_mm', None)
-
-                                if ant:
-
-                                    gps_time = getattr(meta, 'gps_time_sec', 0.0) or 0.0
-
-                                    gps_wk = getattr(meta, 'gps_week', 0) or 0
-
-                                    cap_lines.append(
-
-                                        f"📐 **Фазовый центр антенны:** N: {ant[0]:+.0f} мм, E: {ant[1]:+.0f} мм, V: {ant[2]:+.0f} мм | "
-
-                                        f"GPS-время: {gps_time:.2f}с (неделя {gps_wk})"
-
-                                    )
-                                st.caption("  \n".join(cap_lines))
-                        except Exception as e:
-                            st.caption(f"Ошибка загрузки фото {img_path.name}: {e}")
-            else:
-                st.info("Фотографии БПЛА для данного участка загружаются или обрабатываются.")
-
-        # =====================================================================
-        # COMPREHENSIVE DATASET SHOWCASE: PPK GNSS, MULTISPECTRAL & NOTES
-        # =====================================================================
-        st.markdown("---")
-        c_ppk, c_extra = st.columns([1, 1])
-
-        with c_ppk:
-            st.subheader("🛰️ Геодезический аудит PPK / RINEX 3.05")
-            ppk = getattr(cv_result, 'ppk_summary', None)
-            if ppk and getattr(ppk, 'has_ppk', False):
-                st.success(
-                    f"✅ **Сырые спутниковые наблюдения GNSS подтверждены** (`{ppk.obs_filename}`)"
-                )
-                p_c1, p_c2 = st.columns(2)
-                with p_c1:
-                    st.write(f"**Версия RINEX:** `{ppk.rinex_version}`")
-                    st.write(f"**Спутников в захвате:** **{ppk.approx_satellites_tracked}**")
-                    st.write("**Кинематика:** Двухчастотная L1/L2 (фазовая)")
-                with p_c2:
-                    st.write(f"**Старт:** `{ppk.start_time_utc}`")
-                    st.write(f"**Финиш:** `{ppk.end_time_utc}`")
-                    st.write("**Анти-спуфинг:** ✅ Подтвержден")
-
-                st.info(
-                    f"📡 **Спутниковые созвездия:** {', '.join(ppk.constellations)}  \n"
-                    f"**Метрологический класс:** {ppk.geodetic_survey_grade}"
-                )
-            else:
-                st.info("ℹ️ По данному объекту геодезическая привязка выполнена по бортовому RTK логу (MRK).")
-
-        with c_extra:
-            ms = getattr(cv_result, 'multispectral', None)
-
-            notes = getattr(cv_result, 'operator_notes', [])
-            if ms and getattr(ms, 'has_multispectral', False):
-                st.subheader("🌿 Спектрометрический анализ DJI M3M (NDVI)")
-                st.write(f"**Статус территории:** {ms.site_activity_status}")
-                m_c1, m_c2, m_c3 = st.columns(3)
-                with m_c1:
-                    st.metric("Средний NDVI", f"{ms.mean_ndvi:.3f}")
-                with m_c2:
-                    st.metric("Пятно застройки", f"{ms.construction_soil_pct:.1f}%")
-                with m_c3:
-                    st.metric("Растительность", f"{ms.vegetation_pct:.1f}%")
-
-                if ms.heatmap_rel_path and os.path.exists(ms.heatmap_rel_path):
-                    st.image(
-                        ms.heatmap_rel_path,
-                        caption="Тепловая карта NDVI (Красный: котлован/бетон | Зеленый: растительность)",
-                        use_container_width=True,
-                    )
-                st.caption(
-                    f"Спектральные диапазоны: {', '.join(ms.bands_available[:2])} • "
-                    f"Риск зарастания бурьяном: **{ms.weed_overgrowth_risk}**"
-                )
-            elif notes:
-                st.subheader("📋 Полевой журнал пилота БПЛА")
-                for note in notes:
-                    st.warning(f"📝 **Бортовая заметка:** {note}")
-                st.caption("Данные из бортовых текстовых заметок автоматически переданы в алгоритмы детекции рисков.")
-            else:
-                st.subheader("📋 Полевой журнал пилота БПЛА")
-                st.caption("Полет выполнен в штатном автоматическом режиме по заданию АС «Калита». Замечаний оператора нет.")
-
-    # =========================================================================
-    # TAB 2: INTERACTIVE MAP (Leaflet.js client-side)
-    # =========================================================================
-    with tab2:
-        st.subheader("🗺️ Геоинформационная карта залоговых объектов Сибирского банка")
-        st.caption("Интерактивная карта участков ИЖС Новосибирской области с цветовой индикацией банковских рисков.")
-
-        # Serialize markers for Leaflet.js
-        markers_json = json.dumps(portfolio_data, ensure_ascii=False)
-
-        leaflet_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8" />
-            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-            <style>
-                html, body {{ height: 100%; margin: 0; padding: 0; }}
-                #map {{ height: 520px; width: 100%; border-radius: 8px; border: 1px solid #d1d5db; }}
-                .custom-popup {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; line-height: 1.4; }}
-            </style>
-        </head>
-        <body>
-            <div id="map"></div>
-            <script>
-                var map = L.map('map').setView([54.90, 83.15], 9);
-                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                    attribution: '© OpenStreetMap contributors | ПАО Сбербанк AgentDrone'
-                }}).addTo(map);
-
-                var data = {markers_json};
-
-                data.forEach(function(item) {{
-                    var color = "#15803d"; // Green
-                    if (!item.is_inspected) {{
-                        color = "#94a3b8"; // Slate for uninspected
-                    }} else if (item.risk_level === "CRITICAL") {{
-                        color = "#b91c1c"; // Red
-                    }} else if (item.risk_level === "MEDIUM") {{
-                        color = "#d97706"; // Amber
-                    }}
-
-                    var popupContent = '<div class="custom-popup">' +
-                        '<b style="color:' + color + ';">' + item.cadastral_id + '</b><br/>' +
-                        '<b>Заемщик:</b> ' + item.borrower + '<br/>' +
-                        '<b>Адрес:</b> ' + item.address + '<br/>' +
-                        '<b>Кредит:</b> ' + item.credit_amount.toLocaleString() + ' ₽<br/>';
-
-                    if (item.is_inspected) {{
-                        var readPct = (item.readiness_pct !== null && item.readiness_pct !== undefined) ? item.readiness_pct.toFixed(1) : "0.0";
-                        popupContent += '<b>Готовность:</b> ' + readPct + '% (Стадия ' + item.stage + '%)<br/>' +
-                            '<b>Материал:</b> ' + item.material + '<br/>' +
-                            '<b>Решение:</b> <b>' + item.strategy_code + '</b> (' + item.strategy + ')<br/>' +
-                            '<hr style="margin:6px 0; border:0; border-top:1px solid #e5e7eb;"/>' +
-                            '<span style="font-size:11px; color:#6b7280;">АС Калита: ' + item.kalita_status + '</span>';
-                    }} else {{
-                        popupContent += '<b>Статус:</b> ⚪ Ожидает инспекции (перейдите на участок в меню слева)<br/>' +
-                            '<b>Материал (по КД):</b> ' + item.material + '<br/>' +
-                            '<hr style="margin:6px 0; border:0; border-top:1px solid #e5e7eb;"/>' +
-                            '<span style="font-size:11px; color:#6b7280;">АС Калита: Ожидает осмотра</span>';
-                    }}
-                    popupContent += '</div>';
-
-                    // Custom Circle Marker
-                    var circle = L.circleMarker([item.lat, item.lon], {{
-                        radius: 10,
-                        fillColor: color,
-                        color: "#ffffff",
-                        weight: 2,
-                        opacity: 1,
-                        fillOpacity: item.is_inspected ? 0.85 : 0.45
-                    }}).addTo(map);
-
-                    // Official Cadastral Boundary Polygon (Красные линии ЗУ)
-                    if (item.polygon && item.polygon.length >= 3) {{
-                        var poly = L.polygon(item.polygon, {{
-                            color: "#dc2626",
-                            fillColor: color,
-                            fillOpacity: item.is_inspected ? 0.22 : 0.08,
-                            weight: 2,
-                            dashArray: "4, 4"
-                        }}).addTo(map);
-                        poly.bindPopup(popupContent);
-                    }}
-
-                    // Cadastral Buffer Zone (~50m)
-                    L.circle([item.lat, item.lon], {{
-                        radius: 50,
-                        color: color,
-                        fillColor: color,
-                        fillOpacity: item.is_inspected ? 0.08 : 0.02,
-                        weight: 1
-                    }}).addTo(map);
-
-                    circle.bindPopup(popupContent);
-                    var tooltipLabel = item.cadastral_id + ' (' + item.borrower.split(' ')[0] + (item.is_inspected ? '' : ' — не проверен') + ')';
-                    circle.bindTooltip(tooltipLabel, {{
-                        permanent: false,
-                        direction: 'top'
-                    }});
-                }});
-            </script>
-        </body>
-        </html>
-        """
-        components.html(leaflet_html, height=540)
-
-    # =========================================================================
-    # TAB 3: PORTFOLIO MONITORING & ROI
-    # =========================================================================
-    with tab3:
-        st.subheader("📊 Портфельный мониторинг и Экономический эффект (ROI)")
-
-        col_p1, col_p2 = st.columns([3, 2])
-        with col_p1:
-            st.markdown("#### Реестр залоговых объектов ИЖС Сибирского банка")
-
-            # Pure HTML table
-            rows_html = ""
-            for item in portfolio_data:
-                if not item.get("is_inspected"):
-                    risk_badge = "<span style='background:#f3f4f6; color:#6b7280; padding:4px 10px; border-radius:9999px; font-weight:600; font-size:12px;'>ОЖИДАЕТ</span>"
-                    readiness_str = "<span style='color:#9ca3af;'>Ожидает проверки</span>"
-                    strat_str = "<span style='color:#9ca3af;'>—</span>"
-                else:
-                    risk_badge = (
-                        "<span class='badge-red'>КРИТИЧЕСКИЙ</span>"
-                        if item["risk_level"] == "CRITICAL"
-                        else (
-                            "<span class='badge-yellow'>ВНИМАНИЕ</span>"
-                            if item["risk_level"] == "MEDIUM"
-                            else "<span class='badge-green'>ОК</span>"
-                        )
-                    )
-                    pct_val = item['readiness_pct'] if item['readiness_pct'] is not None else 0.0
-                    readiness_str = f"<b>{pct_val:.1f}%</b> ({item['stage']}%)"
-                    strat_str = f"<code>{item['strategy_code']}</code>"
-
-                rows_html += f"""
-                <tr>
-                    <td><b>{item['cadastral_id']}</b></td>
-                    <td>{item['borrower']}</td>
-                    <td>{item['credit_amount']:,.0f} ₽</td>
-                    <td>{readiness_str}</td>
-                    <td>{item['material']}</td>
-                    <td>{strat_str}</td>
-                    <td>{risk_badge}</td>
-                </tr>
-                """
-
-            table_html = f"""
-            <table class="sber-table">
-                <thead>
-                    <tr>
-                        <th>Кадастровый номер</th>
-                        <th>Заемщик</th>
-                        <th>Сумма кредита</th>
-                        <th>Готовность</th>
-                        <th>Материал</th>
-                        <th>Стратегия</th>
-                        <th>Статус</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
             """
-            st.markdown(table_html, unsafe_allow_html=True)
+        )
 
-        with col_p2:
-            st.markdown("#### Распределение объектов по стратегиям")
-
-            strat_counts = {}
-            inspected_list = [item for item in portfolio_data if item.get("is_inspected")]
-            for item in inspected_list:
-                code = item["strategy_code"]
-                strat_counts[code] = strat_counts.get(code, 0) + 1
-
-            if inspected_list:
-                for scode, count in sorted(strat_counts.items()):
-                    pct = (count / len(inspected_list)) * 100 if inspected_list else 0
-                    st.write(f"**{scode}** ({count} из {len(inspected_list)} пров., {pct:.0f}%)")
-                    st.progress(pct / 100.0)
-            else:
-                st.info("Нет проверенных объектов. Перейдите на участок для расчета стратегии.")
-
-        st.markdown("---")
-        st.subheader("💰 Экономический эффект от внедрения AgentDrone для Сбера")
-
-        col_roi1, col_roi2, col_roi3 = st.columns(3)
-        with col_roi1:
-            st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Сокращение времени инспекции</div>
-                    <div class="metric-value" style="color:#15803d;">96 ч ➔ 15 мин</div>
-                    <div style="font-size:12px; color:#6b7280;">Ускорение цикла в 380 раз</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col_roi2:
-            st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Предотвращенные потери (Фрод)</div>
-                    <div class="metric-value" style="color:#b91c1c;">12 000 000 ₽</div>
-                    <div style="font-size:12px; color:#6b7280;">Кейс Бердск (супермаркет на ИЖС)</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with col_roi3:
-            st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Экономия на выездах инспекторов</div>
-                    <div class="metric-value" style="color:#2563eb;">~4 800 ₽ / объект</div>
-                    <div style="font-size:12px; color:#6b7280;">ROI системы окупается за 1.5 мес.</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    # Workspace Navigation Tabs (4 clean, non-AI functional tabs)
+    tab_photos, tab_geo, tab_act, tab_registry = st.tabs(
+        [
+            f"1. Аэрофотосъемка и границы ЗУ ({len(paired_shots)} кадр.)",
+            "2. Геодезия, PPK и карта Росреестра",
+            "3. Акт проверки залога (Приложение 1)",
+            f"4. Управление объектами ({len(plot_ids)})",
+        ]
+    )
 
     # =========================================================================
-    # TAB 4: OFFICIAL INSPECTION ACT (ANNEX 1)
+    # TAB 1: ALL DRONE PHOTOS WITH RED CADASTRAL BOUNDARY + STRUCTURAL PASSPORT
     # =========================================================================
-    with tab4:
-        st.subheader("📑 Официальный Акт проверки залога недвижимости (Приложение 1)")
-        st.caption("Форма утверждена Регламентом залогового мониторинга Сибирского банка ПАО Сбербанк.")
+    with tab_photos:
+        col_viewer, col_details = st.columns([1.45, 1.0], gap="medium")
 
-        dataset_inst = DroneDataset()
-        plot_photos: list[ReportPhotoItem] = []
-        if dataset_inst.is_available():
-            try:
-                plot_data = dataset_inst.get_plot(selected_raw_id)
-                for idx, p_img in enumerate(plot_data.rgb_images[:6]):
-                    plot_photos.append(
-                        ReportPhotoItem(
-                            file_path=str(p_img),
-                            caption=f"Кадр {idx+1}: {p_img.name} (фасад/надир)",
-                            is_key_view=idx < 2,
+        with col_viewer:
+            _render_html(
+                f"""
+                <div class="ws-panel" style="margin-bottom:8px;">
+                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                        <span>Фотограмметрическая проекция границ ЗУ на снимки БПЛА</span>
+                        <span>Всего кадров: {len(paired_shots)}</span>
+                    </div>
+                </div>
+                """
+            )
+
+            if paired_shots:
+                view_mode = st.radio(
+                    "Режим просмотра снимков:",
+                    options=[
+                        "Детальный просмотр выбранного кадра",
+                        f"Сетка всех кадров участка (Кадры 1–{len(paired_shots)})",
+                    ],
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+
+                if view_mode == "Детальный просмотр выбранного кадра":
+                    shot_options = list(range(len(paired_shots)))
+
+                    def _fmt_shot(idx: int) -> str:
+                        p_img, m_img = paired_shots[idx]
+                        angle_str = m_img.shot_angle.value if m_img else "Обзорный"
+                        pitch_str = (
+                            f"pitch {m_img.gimbal_pitch_deg:.0f}°"
+                            if (m_img and m_img.gimbal_pitch_deg is not None)
+                            else ""
                         )
-                    )
-            except Exception:
-                pass
+                        return f"Кадр {idx + 1} из {len(paired_shots)} — {angle_str} ({p_img.name} {pitch_str})"
 
-        current_giga = st.session_state.get(f"giga_summary_{selected_raw_id}")
+                    sel_idx = st.selectbox(
+                        "Выберите кадр для инспекции:",
+                        options=shot_options,
+                        format_func=_fmt_shot,
+                    )
+                    img_path, meta = paired_shots[sel_idx]
+
+                    if show_boundary:
+                        meta_dict = meta.model_dump() if meta is not None else None
+                        img_bytes = render_cached_boundary_overlay(
+                            str(img_path),
+                            meta_dict,
+                            selected_plot_id,
+                            boundary_width,
+                            show_setback=show_setback,
+                        )
+                        st.image(img_bytes, use_container_width=True)
+                    else:
+                        st.image(str(img_path), use_container_width=True)
+
+                    if meta:
+                        rtk_txt = f"RTK {meta.rtk_status}" if meta.rtk_status else "GNSS EXIF"
+                        st.caption(
+                            f"Файл: {img_path.name} | Ракурс: {meta.shot_angle.value} | "
+                            f"Координаты: {meta.latitude:.6f}, {meta.longitude:.6f} | "
+                            f"Pitch: {meta.gimbal_pitch_deg}° | Yaw: {meta.gimbal_yaw_deg}° | {rtk_txt}"
+                        )
+                else:
+                    # Grid of ALL drone shots (Shots 1..N) with red boundary overlay!
+                    grid_cols = st.columns(2)
+                    for idx, (img_path, meta) in enumerate(paired_shots):
+                        with grid_cols[idx % 2]:
+                            angle_lbl = meta.shot_angle.value if meta else "Кадр БПЛА"
+                            st.markdown(
+                                f"**Кадр {idx + 1}: {angle_lbl}** (`{img_path.name}`)"
+                            )
+                            if show_boundary:
+                                meta_dict = meta.model_dump() if meta is not None else None
+                                img_bytes = render_cached_boundary_overlay(
+                                    str(img_path),
+                                    meta_dict,
+                                    selected_plot_id,
+                                    boundary_width,
+                                    show_setback=show_setback,
+                                )
+                                st.image(img_bytes, use_container_width=True)
+                            else:
+                                st.image(str(img_path), use_container_width=True)
+            else:
+                st.warning("В папке участка отсутствуют изображения .JPG")
+
+        with col_details:
+            # 1. Constructive Readiness Breakdown
+            se = cv_result.structural_elements
+
+            def _elem_badge(ok: bool, conf: float) -> str:
+                cls_name = "ws-status-ok" if ok else "ws-status-warn"
+                txt = f"Выполнено ({int(conf * 100)}%)" if ok else "Отсутствует (0%)"
+                return f'<span class="ws-status-pill {cls_name}">{txt}</span>'
+
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Оценка строительной готовности</span>
+                        <span>Итог: {cv_result.readiness_pct}%</span>
+                    </div>
+                    <div style="font-size:0.9rem; font-weight:700; color:#0F172A; margin-bottom:10px;">
+                        {cv_result.stage_title}
+                    </div>
+                    <table class="sber-table-v2">
+                        <thead>
+                            <tr>
+                                <th>Конструктивный элемент</th>
+                                <th>Вес</th>
+                                <th>Статус верификации</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1. Фундамент (нулевой цикл)</td>
+                                <td>15%</td>
+                                <td>{_elem_badge(se.has_foundation, se.foundation_confidence)}</td>
+                            </tr>
+                            <tr>
+                                <td>2. Стеновой комплект / каркас</td>
+                                <td>40%</td>
+                                <td>{_elem_badge(se.has_walls, se.walls_confidence)}</td>
+                            </tr>
+                            <tr>
+                                <td>3. Кровельное покрытие</td>
+                                <td>30%</td>
+                                <td>{_elem_badge(se.has_roof, se.roof_confidence)}</td>
+                            </tr>
+                            <tr>
+                                <td>4. Тепловой контур (окна, фасад)</td>
+                                <td>15%</td>
+                                <td>{_elem_badge(se.has_windows_doors, se.windows_doors_confidence)}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                """
+            )
+
+            # 2. Official Rosreestr / NSPD Cadastral Passport
+            if parcel:
+                vri_pill = (
+                    '<span class="ws-status-pill ws-status-ok">Целевой (ИЖС / Садоводство)</span>'
+                    if parcel.is_residential_vri
+                    else '<span class="ws-status-pill ws-status-err">Конфликт ВРИ (Нецелевое)</span>'
+                )
+                _render_html(
+                    f"""
+                    <div class="ws-panel">
+                        <div class="ws-panel-header">
+                            <span>Сведения ППК Росреестр / ФГИС ЕЦП НСПД</span>
+                            <span>{len(parcel.polygon_wgs84 or [])} тчк.</span>
+                        </div>
+                        <div class="ws-kv-grid">
+                            <div class="ws-kv-label">Кадастровый номер:</div>
+                            <div class="ws-kv-val">{parcel.cadastral_id}</div>
+                            <div class="ws-kv-label">Адрес (НСПД):</div>
+                            <div class="ws-kv-val">{parcel.address}</div>
+                            <div class="ws-kv-label">Площадь ЗУ:</div>
+                            <div class="ws-kv-val">{parcel.area_sqm:,.0f} м²</div>
+                            <div class="ws-kv-label">Кадастровая ст-ть:</div>
+                            <div class="ws-kv-val">{parcel.cadastral_value_rub:,.2f} ₽</div>
+                            <div class="ws-kv-label">Разрешенное исп.:</div>
+                            <div class="ws-kv-val">{parcel.permitted_use}</div>
+                            <div class="ws-kv-label">Статус ВРИ:</div>
+                            <div class="ws-kv-val">{vri_pill}</div>
+                            <div class="ws-kv-label">Центроид (WGS-84):</div>
+                            <div class="ws-kv-val">{parcel.centroid_lat:.6f}, {parcel.centroid_lon:.6f}</div>
+                        </div>
+                    </div>
+                    """
+                )
+                if st.button("Запросить актуальную выписку из НСПД / Росреестра", use_container_width=True):
+                    fetched = CadastralRegistry.fetch_from_rosreestr_api(parcel.cadastral_id, timeout=4.0)
+                    clear_all_caches()
+                    if fetched:
+                        st.toast(f"Данные Росреестра для {parcel.cadastral_id} обновлены онлайн.")
+                    else:
+                        st.toast(f"Использован локальный гео-кэш Росреестра для {parcel.cadastral_id}.")
+                    st.rerun()
+
+            # 3. Decision Engine Action Box
+            steps_html = "".join(f"<li>{s}</li>" for s in decision_result.reasoning)
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Решение по кредитному досье</span>
+                        <span>{decision_result.strategy_code}</span>
+                    </div>
+                    <div style="font-weight:700; color:#0F172A; margin-bottom:6px;">
+                        {decision_result.strategy.value}
+                    </div>
+                    <div style="font-size:0.84rem; color:#334155; margin-bottom:8px;">
+                        {decision_result.action_required}
+                    </div>
+                    <div style="font-size:0.82rem; color:#475569;">
+                        <strong>Обоснование решения (АС «Калита» — {decision_result.kalita_status}):</strong>
+                        <ul style="margin:4px 0 0 18px; padding:0;">{steps_html}</ul>
+                    </div>
+                </div>
+                """
+            )
+
+            # 4. Sber AI Agent (GigaChat-2-Max Vision) Findings
+            if cv_result.operator_notes or cv_result.defects_detected:
+                defects_li = "".join(f"<li>{d}</li>" for d in cv_result.defects_detected)
+                defects_block = (
+                    f'<div style="margin-top:8px; font-size:0.82rem; color:#92400E;">'
+                    f'<strong>Выявленные помехи съемке и замечания ИИ-агента:</strong>'
+                    f'<ul style="margin:4px 0 0 18px; padding:0;">{defects_li}</ul></div>'
+                    if defects_li
+                    else ""
+                )
+                notes_html = (
+                    "<br><br>".join(cv_result.operator_notes)
+                    if isinstance(cv_result.operator_notes, list)
+                    else str(cv_result.operator_notes or "")
+                )
+                _render_html(
+                    f"""
+                    <div class="ws-panel">
+                        <div class="ws-panel-header">
+                            <span>Заключение ИИ-агента Сбербанка (GigaChat-2-Max Vision)</span>
+                            <span>Мультимодальный анализ</span>
+                        </div>
+                        <div style="font-size:0.85rem; color:#1E293B; line-height:1.5;">
+                            {notes_html or "Анализ выполнен в штатном режиме."}
+                        </div>
+                        {defects_block}
+                    </div>
+                    """
+                )
+
+    # =========================================================================
+    # TAB 2: GEODESY, PPK & ROSREESTR MAP
+    # =========================================================================
+    with tab_geo:
+        g_col1, g_col2 = st.columns([1.4, 1.0], gap="medium")
+        with g_col1:
+            _render_html(
+                f"""
+                <div class="ws-panel" style="margin-bottom:8px;">
+                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                        <span>Карта кадастрового контура ЗУ и точек съемки БПЛА</span>
+                        <span>Дистанция до центра: {cv_result.geocheck.distance_to_cadastre_m:.1f} м</span>
+                    </div>
+                </div>
+                """
+            )
+            fmap_html = build_inspection_folium_map(
+                parcel=parcel,
+                shots_meta=cv_result.shots_metadata,
+                is_geofence_valid=cv_result.geocheck.is_geofence_valid,
+            )
+            components.html(fmap_html, height=460)
+
+        with g_col2:
+            gc = cv_result.geocheck
+            comp = cv_result.completeness
+            ppk = cv_result.ppk_summary
+            ms = cv_result.multispectral
+
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Геовалидация и полнота ракурсов</span>
+                        <span>{"СООТВЕТСТВУЕТ" if gc.is_geofence_valid else "НАРУШЕНИЕ ГЕОЗОНЫ"}</span>
+                    </div>
+                    <div class="ws-kv-grid">
+                        <div class="ws-kv-label">Статус верификации:</div>
+                        <div class="ws-kv-val">{gc.verification_status} ({comp.total_shots} снимков)</div>
+                        <div class="ws-kv-label">Отклонение от центра:</div>
+                        <div class="ws-kv-val">{gc.distance_to_cadastre_m:.1f} м (прицел: {gc.mean_camera_aim_dist_m:.1f} м)</div>
+                        <div class="ws-kv-label">Фасадные ракурсы:</div>
+                        <div class="ws-kv-val">{comp.facades_count} из 4 (С, Ю, В, З)</div>
+                        <div class="ws-kv-label">Надирные ракурсы:</div>
+                        <div class="ws-kv-val">{comp.nadir_count} из 2 (высокий / низкий)</div>
+                        <div class="ws-kv-label">RINEX / PPK логи:</div>
+                        <div class="ws-kv-val">{ppk.rinex_version if (ppk and ppk.has_ppk) else "RTK MRK"}</div>
+                        <div class="ws-kv-label">Индекс NDVI (средн.):</div>
+                        <div class="ws-kv-val">{f"{ms.mean_ndvi:.3f} ({ms.site_activity_status})" if (ms and ms.has_multispectral) else "Только RGB"}</div>
+                    </div>
+                </div>
+                """
+            )
+
+            if cv_result.shots_metadata:
+                rows_tr = ""
+                for idx, m in enumerate(cv_result.shots_metadata, start=1):
+                    rows_tr += (
+                        f"<tr>"
+                        f"<td>{idx}</td>"
+                        f"<td>{m.filename}</td>"
+                        f"<td>{m.shot_angle.value}</td>"
+                        f"<td>{m.latitude:.6f}, {m.longitude:.6f}</td>"
+                        f"<td>{m.gimbal_pitch_deg}° / {m.gimbal_yaw_deg}°</td>"
+                        f"</tr>"
+                    )
+                _render_html(
+                    f"""
+                    <div class="ws-panel">
+                        <div class="ws-panel-header">Журнал телеметрии снимков БПЛА</div>
+                        <table class="sber-table-v2">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Файл</th>
+                                    <th>Ракурс</th>
+                                    <th>WGS-84 (Lat, Lon)</th>
+                                    <th>Pitch / Yaw</th>
+                                </tr>
+                            </thead>
+                            <tbody>{rows_tr}</tbody>
+                        </table>
+                    </div>
+                    """
+                )
+
+    # =========================================================================
+    # TAB 3: COLLATERAL INSPECTION ACT (APPENDIX 1) & EXPERT SUMMARY
+    # =========================================================================
+    with tab_act:
+        gigachat_srv = GigaChatInspectorService(credentials=gigachat_key if gigachat_key else None)
+        ai_summary = gigachat_srv.generate_summary_for_ui(
+            cv_result=cv_result,
+            credit_obj=credit_obj,
+            decision=decision_result,
+            plot_dir=ds.root_dir / selected_plot_id,
+            parcel=parcel,
+        )
+
+        _render_html(
+            f"""
+            <div class="ws-panel">
+                <div class="ws-panel-header">
+                    <span>Экспертное заключение по объекту {cv_result.cadastral_id}</span>
+                    <span>{"GigaChat API Сбер" if gigachat_srv.is_online else "АС «Калита»"}</span>
+                </div>
+                <div style="font-size:0.9rem; color:#1E293B; line-height:1.55;">
+                    {ai_summary}
+                </div>
+            </div>
+            """
+        )
+
+        act_photos: list[ReportPhotoItem] = []
+        for idx, (p_shot, m_shot) in enumerate(paired_shots[:4], start=1):
+            b64_uri = get_base64_image(p_shot, apply_overlay=True, meta=m_shot, parcel=parcel)
+            if b64_uri:
+                angle_str = m_shot.shot_angle.value if m_shot else "Обзорный"
+                act_photos.append(
+                    ReportPhotoItem(
+                        file_path=b64_uri,
+                        caption=f"Кадр {idx} ({angle_str}): {p_shot.name} — Красная линия ЗУ Росреестр",
+                        is_key_view=(idx == 1),
+                    )
+                )
+
         act_data = build_act_from_cv(
             cv_result=cv_result,
             credit_obj=credit_obj,
-            decision=decision,
-            gigachat_summary=current_giga,
-            photos=plot_photos,
+            decision=decision_result,
+            gigachat_summary=ai_summary,
+            photos=act_photos,
         )
-        act_generator = ActGenerator()
-        act_html = act_generator.render_html(act_data)
+        act_gen = ActGenerator()
+        html_report = act_gen.render_html(act_data)
 
-        # Embedded preview in Streamlit
-        components.html(act_html, height=850, scrolling=True)
-
-        st.write("")
-        b64_act = base64.b64encode(act_html.encode("utf-8")).decode("utf-8")
-        href = (
-            f'<a href="data:text/html;base64,{b64_act}" '
-            f'download="Акт_проверки_залога_{selected_raw_id}.html" '
-            f'style="background:#21a038; color:white; padding:10px 18px; border-radius:6px; '
-            f'text-decoration:none; font-weight:600;">📥 Скачать официальный Акт (HTML / Печать A4)</a>'
+        st.download_button(
+            label="Скачать официальный Акт проверки залога (Приложение 1, HTML / Печать в PDF)",
+            data=html_report.encode("utf-8"),
+            file_name=f"Act_Collateral_{selected_plot_id}.html",
+            mime="text/html",
+            type="primary",
+            use_container_width=True,
         )
-        st.markdown(href, unsafe_allow_html=True)
+
+        components.html(html_report, height=760, scrolling=True)
 
     # =========================================================================
-    # TAB 5: DATASET MANAGEMENT (UPLOAD / DELETE PARCEL FOLDERS)
+    # TAB 4: USER PARCEL UPLOAD, DELETION & PORTFOLIO REGISTRY
     # =========================================================================
-    with tab5:
-        st.subheader("📁 Центр управления папками участков на сервере")
-        st.markdown(
-            "Серверный модуль для загрузки и удаления съемок БПЛА. Все данные поставляются "
-            "**в стандартном формате БПЛА**: папка с номером участка, содержащая снимки DJI (`*.JPG`), "
-            "лог меток затвора (`Timestamp.MRK`), PPK-наблюдения (`*.obs`, `*.nav`, `*.bin`) и служебные файлы."
+    with tab_registry:
+        u_col1, u_col2 = st.columns(2, gap="medium")
+        with u_col1:
+            _render_html(
+                """
+                <div class="ws-panel" style="margin-bottom:8px;">
+                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                        <span>Добавить новый дом / участок (Файлы БПЛА + Кадастровый номер)</span>
+                    </div>
+                </div>
+                """
+            )
+            form_cad = st.text_input(
+                "Кадастровый номер земельного участка:",
+                placeholder="Например: 54:19:164603:3847",
+                key="main_upload_cad",
+            )
+            form_files = st.file_uploader(
+                "Выберите снимки с дрона (.JPG) и навигационный файл (.MRK):",
+                type=["jpg", "jpeg", "tif", "tiff", "mrk", "obs", "nav", "txt"],
+                accept_multiple_files=True,
+                key="main_upload_files",
+            )
+            if st.button("Загрузить участок и запросить данные Росреестра", type="primary"):
+                handle_upload_files(form_cad, form_files)
+
+        with u_col2:
+            _render_html(
+                """
+                <div class="ws-panel" style="margin-bottom:8px;">
+                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                        <span>Пакетная загрузка ZIP-архива и управление реестром</span>
+                    </div>
+                </div>
+                """
+            )
+            form_zip_cad = st.text_input(
+                "Целевой кадастровый номер (для плоского архива):",
+                placeholder="Необязательно, если папки названы по кадастру",
+                key="main_zip_cad",
+            )
+            form_zip = st.file_uploader(
+                "Выберите ZIP-архив:",
+                type=["zip"],
+                key="main_zip_file",
+            )
+            b_col1, b_col2 = st.columns(2)
+            with b_col1:
+                if st.button("Загрузить ZIP-архив", type="primary", use_container_width=True):
+                    handle_upload_zip(form_zip, target_plot_id=form_zip_cad)
+            with b_col2:
+                if st.button("Проверить все участки пакетно", use_container_width=True):
+                    with st.spinner("Пакетный расчет всех участков..."):
+                        for pid in plot_ids:
+                            if pid not in st.session_state["inspected_plots"]:
+                                st.session_state["inspected_plots"][pid] = analyze_single_plot(pid)
+                    st.rerun()
+
+        # Table of all plots on the server with direct Delete / Inspect buttons
+        portfolio_data = get_portfolio_summary(plot_ids, st.session_state["inspected_plots"])
+        _render_html(
+            f"""
+            <div class="ws-panel" style="margin-top:12px; margin-bottom:8px;">
+                <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                    <span>Реестр загруженных объектов на сервере ({len(portfolio_data)})</span>
+                    <span>Проверено: {len(st.session_state["inspected_plots"])} из {len(portfolio_data)}</span>
+                </div>
+            </div>
+            """
         )
 
-        col_up, col_list = st.columns([1, 1], gap="large")
-
-        with col_up:
-            st.markdown("### 📤 Загрузить новую папку на сервер")
-            tab_z, tab_f = st.tabs(["📦 ZIP-архив папки участка", "📄 Выбор файлов съемки"])
-
-            with tab_z:
-                st.info(
-                    "💡 **Рекомендуемый способ:** упакуйте папку участка (или несколько папок) в `.zip` и загрузите. "
-                    "Система автоматически распакует данные, проверит структуру и подключит объект к мониторингу."
-                )
-                tab5_zip = st.file_uploader(
-                    "Перетащите ZIP-архив с папкой участка:",
-                    type=["zip"],
-                    key="tab5_zip_file",
-                    help="Поддерживаются как одиночные папки, так и архивы с несколькими участками",
-                )
-                tab5_cad_override = st.text_input(
-                    "Кадастровый номер папки (опционально, если архив не содержит имя папки):",
-                    placeholder="5407055001178",
-                    key="tab5_zip_override",
-                )
-                if st.button(
-                    "🚀 Загрузить и развернуть на сервере",
-                    type="primary",
-                    key="tab5_btn_zip_main",
-                    use_container_width=True,
-                ):
-                    if tab5_zip:
-                        with st.spinner("📦 Распаковка архива и сохранение на сервере..."):
-                            handle_upload_zip(tab5_zip, tab5_cad_override)
-                    else:
-                        st.error("Пожалуйста, выберите ZIP-архив для загрузки.")
-
-            with tab_f:
-                st.info(
-                    "Укажите кадастровый номер и выберите файлы съемки "
-                    "(фотографии JPG, файл Timestamp.MRK, файлы PPK)."
-                )
-                tab5_plot_id = st.text_input(
-                    "Кадастровый номер создаваемой папки (обязательно):",
-                    placeholder="Например: 5419163001999 или 54:19:163001:999",
-                    key="tab5_manual_id",
-                )
-                tab5_files = st.file_uploader(
-                    "Выберите файлы съемки БПЛА:",
-                    accept_multiple_files=True,
-                    key="tab5_manual_files",
-                )
-                if tab5_files:
-                    st.caption(f"Выбрано файлов: **{len(tab5_files)}**")
-                if st.button(
-                    "💾 Сохранить папку на сервере",
-                    type="primary",
-                    key="tab5_btn_files_main",
-                    use_container_width=True,
-                ):
-                    with st.spinner("💾 Сохранение файлов на сервере..."):
-                        handle_upload_files(tab5_plot_id, tab5_files)
-
-        with col_list:
-            st.markdown(f"### 📋 Папки участков на сервере ({len(plot_ids)})")
-            root_path = ParcelManager.get_dataset_root()
-            st.caption(f"📂 Корневой каталог датасета: `{root_path}`")
-
-            if not plot_ids:
-                st.warning("На сервере пока нет доступных папок.")
-            else:
-                for pid in plot_ids:
-                    p_info = ParcelManager.get_plot_stats(pid)
-                    norm_name = normalize_cadastral_id(pid)
-                    is_active = (pid == selected_raw_id)
-                    border_color = "#21a038" if is_active else "#e5e7eb"
-
-                    with st.container():
-                        st.markdown(
-                            f"""
-                            <div style="border: 2px solid {border_color}; border-radius: 8px; """
-                            f"""padding: 12px; margin-bottom: 10px; background: white;">
-                                <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <div style="font-size:15px; font-weight:700; color:#1f2937;">
-                                        {'📍 ' if is_active else '📁 '} {norm_name}
-                                        <span style="font-size:12px; color:#6b7280; font-weight:normal;">({pid})</span>
-                                    </div>
-                                    <div style="font-size:12px; color:#15803d; font-weight:600;">
-                                        {'● Выбран для инспекции' if is_active else ''}
-                                    </div>
-                                </div>
-                                <div style="font-size:12px; color:#4b5563; margin-top:6px;">
-                                    📷 RGB-фото: <b>{p_info['rgb_count']}</b> |
-                                    🛰️ MRK: <b>{'Да' if p_info['has_mrk'] else 'Нет'}</b> |
-                                    📡 PPK: <b>{'Да' if p_info['has_ppk'] else 'Нет'}</b> |
-                                    💾 Размер: <b>{p_info['size_mb']} МБ</b>
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                        c_act1, c_act2 = st.columns([3, 2])
-                        with c_act1:
-                            if not is_active:
-                                if st.button(
-                                    f"🔍 Открыть {norm_name}",
-                                    key=f"t5_inspect_{pid}",
-                                    use_container_width=True,
-                                ):
-                                    st.session_state["selected_plot_id"] = pid
-                                    st.session_state.last_visited_plot_id = None
-                                    st.session_state.pop("plot_select_box", None)
-                                    st.rerun()
-                            else:
-                                st.success("Текущий объект")
-                        with c_act2:
-                            with st.popover("🗑️ Удалить", use_container_width=True):
-                                st.warning(f"Удалить папку {norm_name} с сервера?")
-                                st.caption(
-                                    f"Файлов: {p_info['total_files']} | Размер: {p_info['size_mb']} МБ"
-                                )
-                                if st.button(
-                                    "⚠️ Да, удалить навсегда",
-                                    type="primary",
-                                    key=f"t5_del_confirm_{pid}",
-                                    use_container_width=True,
-                                ):
-                                    handle_delete_plot(pid)
+        for item in portfolio_data:
+            raw_pid = item["raw_id"]
+            p_stats = ParcelManager.get_plot_stats(raw_pid)
+            r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns([2.2, 2.5, 1.8, 1.2, 1.0])
+            with r_c1:
+                st.markdown(f"**{item['cadastral_id']}**")
+                st.caption(f"Папка: `{raw_pid}` ({p_stats['rgb_count']} фото, {p_stats['size_mb']} МБ)")
+            with r_c2:
+                st.markdown(f"{item['borrower']}")
+                st.caption(f"{item['address']}")
+            with r_c3:
+                if item["is_inspected"]:
+                    st.markdown(
+                        f"Готовность: **{item['readiness_pct']}%** (Стадия {item['stage']}%)"
+                    )
+                    st.caption(f"Материал: {item['material']} • {item['strategy_code']}")
+                else:
+                    st.markdown("Статус: *Ожидает осмотра*")
+                    st.caption(f"План: {item['material']}")
+            with r_c4:
+                if st.button("Открыть", key=f"open_{raw_pid}", use_container_width=True):
+                    st.session_state["selected_plot_id"] = raw_pid
+                    st.rerun()
+            with r_c5:
+                if st.button("Удалить", key=f"del_{raw_pid}", use_container_width=True):
+                    handle_delete_plot(raw_pid)
+            _render_html("<hr style='margin:6px 0; border-color:#F1F5F9;'>")
 
 
 if __name__ == "__main__":

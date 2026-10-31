@@ -51,10 +51,15 @@ class DecisionEngine:
         # 1. Determine if this is a CV-based evaluation (from UI / cv pipeline)
         if remaining_args and isinstance(remaining_args[0], CVInspectionResult):
             cv_res = remaining_args[0]
-            credit_o = remaining_args[1] if len(remaining_args) > 1 else kwargs.get("credit_obj")
+            credit_o = (
+                remaining_args[1]
+                if len(remaining_args) > 1
+                else (kwargs.get("credit_obj") or kwargs.get("credit_object"))
+            )
             return cls.evaluate_cv(cv_res, credit_o)
         elif "cv_result" in kwargs:
-            return cls.evaluate_cv(kwargs["cv_result"], kwargs.get("credit_obj"))
+            credit_o = kwargs.get("credit_obj") or kwargs.get("credit_object")
+            return cls.evaluate_cv(kwargs["cv_result"], credit_o)
 
         # 2. Domain-based evaluation (CreditObject + InspectionResult)
         credit = remaining_args[0] if remaining_args else kwargs.get("credit")
@@ -69,9 +74,12 @@ class DecisionEngine:
     @staticmethod
     def evaluate_cv(
         cv_result: CVInspectionResult,
-        credit_obj: CVCreditObject,
+        credit_obj: Optional[CVCreditObject] = None,
     ) -> CVStrategyRecommendation:
         """Evaluate drone CV inspection against credit agreement covenants."""
+        if credit_obj is None:
+            from ..ingestion.credit_registry import CreditRegistry
+            credit_obj = CreditRegistry.get_credit_object(cv_result.cadastral_id)
         reasons: list[str] = []
 
         # 1. STOP-FRAUD CHECK (Highest Priority)

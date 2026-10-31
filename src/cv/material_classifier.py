@@ -38,10 +38,19 @@ class MaterialClassifier:
 
         avg_veg = sum(f.vegetation_ratio for f in features_list) / count
         max_struct_ratio = max(f.structure_area_ratio for f in features_list)
+        big_metal_shots = sum(
+            1
+            for f in features_list
+            if f.structure_area_ratio >= 0.48 and f.color_shares.get("metal_panel", 0.0) >= 0.32
+        )
 
-        # Check for commercial metal sandwich panel (low vegetation + large flat structure footprint)
-        if avg_veg < 0.25 and max_struct_ratio > 0.30 and agg_shares["metal_panel"] > 0.20:
-            return WallMaterial.SANDWICH_PANEL, 0.85
+        # Check for commercial metal sandwich panel / supermarket roof & facade
+        # Supports both open commercial lots and commercial buildings surrounded by dense trees
+        if (
+            (avg_veg < 0.25 and max_struct_ratio > 0.30 and agg_shares["metal_panel"] > 0.20)
+            or (big_metal_shots >= 3 and max_struct_ratio >= 0.70 and agg_shares["metal_panel"] >= 0.32)
+        ):
+            return WallMaterial.SANDWICH_PANEL, 0.92
 
         # Compare residential materials
         res_scores = {

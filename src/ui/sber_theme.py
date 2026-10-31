@@ -10,74 +10,75 @@
 from __future__ import annotations
 
 # Официальный векторный логотип Сбербанка (SVG)
-SBER_LOGO_SVG = """
-<svg width="140" height="38" viewBox="0 0 160 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="sberGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0E8528" />
-      <stop offset="55%" stop-color="#21A038" />
-      <stop offset="100%" stop-color="#18D24E" />
-    </linearGradient>
-    <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00A2F8" />
-      <stop offset="40%" stop-color="#21A038" />
-      <stop offset="85%" stop-color="#F2DD10" />
-    </linearGradient>
-  </defs>
-  <!-- Sber Ring Emblem -->
-  <g transform="translate(4, 2)">
-    <circle cx="20" cy="20" r="18" stroke="url(#ringGrad)" stroke-width="4" fill="none" stroke-dasharray="100" stroke-dashoffset="15" stroke-linecap="round"/>
-    <path d="M12 20 L18 26 L29 14" stroke="url(#sberGrad)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  </g>
-  <!-- Sber Wordmark -->
-  <text x="54" y="29" fill="#121922" font-family="'SB Sans Display', 'SBSansDisplay', sans-serif" font-size="24" font-weight="800" letter-spacing="0.5">СБЕР</text>
-</svg>
-"""
+SBER_LOGO_SVG = (
+    '<svg width="140" height="38" viewBox="0 0 160 44" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<defs>'
+    '<linearGradient id="sberGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
+    '<stop offset="0%" stop-color="#0E8528" />'
+    '<stop offset="55%" stop-color="#21A038" />'
+    '<stop offset="100%" stop-color="#18D24E" />'
+    '</linearGradient>'
+    '<linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">'
+    '<stop offset="0%" stop-color="#00A2F8" />'
+    '<stop offset="40%" stop-color="#21A038" />'
+    '<stop offset="85%" stop-color="#F2DD10" />'
+    '</linearGradient>'
+    '</defs>'
+    '<g transform="translate(4, 2)">'
+    '<circle cx="20" cy="20" r="18" stroke="url(#ringGrad)" stroke-width="4" fill="none" '
+    'stroke-dasharray="100" stroke-dashoffset="15" stroke-linecap="round"/>'
+    '<path d="M12 20 L18 26 L29 14" stroke="url(#sberGrad)" stroke-width="4.2" '
+    'stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+    '</g>'
+    '<text x="54" y="29" fill="#121922" font-family="\'SB Sans Display\', \'SBSansDisplay\', sans-serif" '
+    'font-size="24" font-weight="800" letter-spacing="0.5">СБЕР</text>'
+    '</svg>'
+)
 
 # Малые SVG иконки в корпоративном стиле
 SVG_ICONS = {
-    "drone": """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#21A038" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a4 4 0 0 0-4 4c0 1.6.9 3 2.3 3.7L7 13.5l1.5 1.5 3.5-3.3 3.5 3.3 1.5-1.5-3.3-3.8A4.1 4.1 0 0 0 16 6a4 4 0 0 0-4-4z"/>
-            <path d="m3 7 4 4"/>
-            <path d="m21 7-4 4"/>
-            <path d="M6 18h12"/>
-            <circle cx="12" cy="18" r="2"/>
-        </svg>
-    """,
-    "money": """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0098F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="6" width="20" height="12" rx="3"/>
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M6 12h.01M18 12h.01"/>
-        </svg>
-    """,
-    "chart": """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#21A038" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 3v18h18"/>
-            <path d="m7 14 4-4 4 4 5-6"/>
-        </svg>
-    """,
-    "shield_alert": """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E11D48" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            <line x1="12" y1="8" x2="12" y2="12"/>
-            <line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-    """,
-    "check_circle": """
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-            <polyline points="22 4 12 14.01 9 11.01"/>
-        </svg>
-    """,
-    "satellite": """
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#21A038" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="2"/>
-            <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>
-        </svg>
-    """,
+    "drone": (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#21A038" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 2a4 4 0 0 0-4 4c0 1.6.9 3 2.3 3.7L7 13.5l1.5 1.5 3.5-3.3 3.5 3.3 '
+        '1.5-1.5-3.3-3.8A4.1 4.1 0 0 0 16 6a4 4 0 0 0-4-4z"/>'
+        '<path d="m3 7 4 4"/><path d="m21 7-4 4"/><path d="M6 18h12"/><circle cx="12" cy="18" r="2"/>'
+        '</svg>'
+    ),
+    "money": (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#0098F8" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<rect x="2" y="6" width="20" height="12" rx="3"/><circle cx="12" cy="12" r="3"/>'
+        '<path d="M6 12h.01M18 12h.01"/>'
+        '</svg>'
+    ),
+    "chart": (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#21A038" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/>'
+        '</svg>'
+    ),
+    "shield_alert": (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E11D48" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+        '<line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>'
+        '</svg>'
+    ),
+    "check_circle": (
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16A34A" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>'
+        '</svg>'
+    ),
+    "satellite": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#21A038" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="2"/>'
+        '<path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/>'
+        '<path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>'
+        '</svg>'
+    ),
 }
 
 
@@ -478,6 +479,20 @@ def get_sber_css() -> str:
     .sber-table-v2 tr:hover td {
         background-color: #F8FDF9;
     }
+    .sber-fraud-alert {
+        background: #FEF2F2;
+        border: 1px solid #FCA5A5;
+        border-left: 6px solid #DC2626;
+        border-radius: 12px;
+        padding: 14px 18px;
+        margin: 12px 0 18px 0;
+        color: #7F1D1D;
+    }
+    .sber-fraud-title {
+        font-weight: 700;
+        font-size: 0.92rem;
+        color: #991B1B;
+    }
     </style>
     """
 
@@ -488,80 +503,102 @@ def render_sber_header(
     giga_status: str = "GigaChat-2-Pro",
     giga_online: bool = False,
 ) -> str:
-    """Генерирует HTML-шапку в фирменном стиле sberbank.ru."""
-    giga_bg = "background:#EAF8ED; color:#0E7425; border: 1px solid rgba(33, 160, 56, 0.25);" if giga_online else "background:#FEF9C3; color:#854D0E; border: 1px solid rgba(234, 179, 8, 0.25);"
-    return f"""
-    <div class="sber-top-navbar">
-        <div class="sber-brand-group">
-            {SBER_LOGO_SVG}
-            <div class="sber-brand-divider"></div>
-            <div>
-                <h1 class="sber-service-title">Центр мониторинга залогов ИЖС</h1>
-                <p class="sber-service-subtitle">Сибирский банк ПАО Сбербанк • Инспекция БПЛА & АС «Калита»</p>
-            </div>
-        </div>
-        <div class="sber-telemetry-pills">
-            <div class="sber-pill-status active">
-                <span class="sber-pulse-dot"></span>
-                <span>DJI RTK {rtk_status}</span>
-            </div>
-            <div class="sber-pill-status" style="{giga_bg}">
-                <span>🤖 {giga_status}</span>
-            </div>
-            <div class="sber-pill-status">
-                <span>⚡ АС «Калита» Онлайн</span>
-            </div>
-            <div class="sber-pill-status" style="background:#EBF5FF; color:#1D4ED8;">
-                <span>🎯 Роль #3 (Инспектор-дизайнер)</span>
-            </div>
-        </div>
-    </div>
-    """
+    """Генерирует HTML-шапку в фирменном стиле sberbank.ru без отступов Markdown."""
+    giga_bg = (
+        "background:#EAF8ED; color:#0E7425; border: 1px solid rgba(33, 160, 56, 0.25);"
+        if giga_online
+        else "background:#FEF9C3; color:#854D0E; border: 1px solid rgba(234, 179, 8, 0.25);"
+    )
+    return (
+        '<div class="sber-top-navbar">'
+        '<div class="sber-brand-group">'
+        f'{SBER_LOGO_SVG}'
+        '<div class="sber-brand-divider"></div>'
+        '<div>'
+        '<h1 class="sber-service-title">Центр мониторинга залогов ИЖС</h1>'
+        '<p class="sber-service-subtitle">Сибирский банк ПАО Сбербанк • Инспекция БПЛА &amp; АС «Калита»</p>'
+        '</div>'
+        '</div>'
+        '<div class="sber-telemetry-pills">'
+        '<div class="sber-pill-status active">'
+        '<span class="sber-pulse-dot"></span>'
+        f'<span>DJI RTK {rtk_status}</span>'
+        '</div>'
+        f'<div class="sber-pill-status" style="{giga_bg}">'
+        f'<span>{giga_status}</span>'
+        '</div>'
+        '<div class="sber-pill-status">'
+        '<span>АС «Калита» Онлайн</span>'
+        '</div>'
+        '<div class="sber-pill-status" style="background:#EBF5FF; color:#1D4ED8;">'
+        f'<span>Роль #3 • Объектов: {active_objects_count}</span>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
 
 
-def render_gigachat_card(summary_text: str, is_online: bool = False, model_name: str = "GigaChat-2-Pro") -> str:
+def render_gigachat_card(
+    summary_text: str,
+    is_online: bool = False,
+    model_name: str = "GigaChat-2-Pro",
+) -> str:
     """Генерирует карточку AI-заключения GigaChat в корпоративном стиле Сбера."""
-    status_label = f"🟢 GigaChat API ({model_name})" if is_online else "🟡 Автономный шаблонизатор"
+    status_label = f"GigaChat API ({model_name})" if is_online else "Автономный шаблонизатор"
     status_badge_class = "sber-badge-green" if is_online else "sber-badge-yellow"
-    return f"""
-    <div class="sber-white-card" style="border-left: 6px solid var(--sber-green); margin: 16px 0 20px 0;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 20px;">🤖</span>
-                <strong style="font-family: var(--sber-font-display); font-size: 16px; color: var(--sber-text-primary);">
-                    Экспертное заключение ИИ-инспектора GigaChat для АС «Калита»
-                </strong>
-            </div>
-            <span class="{status_badge_class}">
-                {status_label}
-            </span>
-        </div>
-        <div style="font-size: 14px; line-height: 1.6; color: #1F2937; white-space: pre-line; background: #F8FAFC; padding: 16px; border-radius: 12px; border: 1px solid #E2E8F0;">
-{summary_text}
-        </div>
-    </div>
-    """
+    return (
+        '<div class="sber-white-card" style="border-left: 6px solid var(--sber-green); margin: 16px 0 20px 0;">'
+        '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">'
+        '<div style="display: flex; align-items: center; gap: 10px;">'
+        '<strong style="font-family: var(--sber-font-display); font-size: 16px; color: var(--sber-text-primary);">'
+        'Экспертное заключение ИИ-инспектора GigaChat для АС «Калита»'
+        '</strong>'
+        '</div>'
+        f'<span class="{status_badge_class}">{status_label}</span>'
+        '</div>'
+        '<div style="font-size: 14px; line-height: 1.6; color: #1F2937; white-space: pre-line; '
+        'background: #F8FAFC; padding: 16px; border-radius: 12px; border: 1px solid #E2E8F0;">'
+        f'{summary_text}'
+        '</div>'
+        '</div>'
+    )
 
 
-def render_kpi_card(title: str, value: str, subtext: str, icon_type: str = "drone", is_alert: bool = False, is_success: bool = False) -> str:
+def render_kpi_card(
+    title: str,
+    value: str,
+    subtext: str,
+    icon_type: str = "drone",
+    is_alert: bool = False,
+    is_success: bool = False,
+    is_danger: bool = False,
+    is_warning: bool = False,
+) -> str:
     """Генерирует виджет карточки KPI в стиле СберБанк Онлайн."""
     icon_svg = SVG_ICONS.get(icon_type, SVG_ICONS["drone"])
-    sub_color = "#15803D" if is_success else ("#B91C1C" if is_alert else "#687182")
-    icon_bg = "#FEE2E2" if is_alert else ("#EAF8ED" if is_success else "#F4F6F9")
+    alert_flag = is_alert or is_danger
+    if alert_flag:
+        sub_color = "#B91C1C"
+        icon_bg = "#FEE2E2"
+    elif is_warning:
+        sub_color = "#B45309"
+        icon_bg = "#FEF3C7"
+    elif is_success:
+        sub_color = "#15803D"
+        icon_bg = "#EAF8ED"
+    else:
+        sub_color = "#687182"
+        icon_bg = "#F4F6F9"
 
-    return f"""
-    <div class="sber-kpi-card">
-        <div class="sber-kpi-top">
-            <span class="sber-kpi-label">{title}</span>
-            <div class="sber-kpi-icon-wrap" style="background:{icon_bg};">
-                {icon_svg}
-            </div>
-        </div>
-        <div>
-            <div class="sber-kpi-value">{value}</div>
-            <div class="sber-kpi-subtext" style="color:{sub_color};">
-                {subtext}
-            </div>
-        </div>
-    </div>
-    """
+    return (
+        '<div class="sber-kpi-card">'
+        '<div class="sber-kpi-top">'
+        f'<span class="sber-kpi-label">{title}</span>'
+        f'<div class="sber-kpi-icon-wrap" style="background:{icon_bg};">{icon_svg}</div>'
+        '</div>'
+        '<div>'
+        f'<div class="sber-kpi-value">{value}</div>'
+        f'<div class="sber-kpi-subtext" style="color:{sub_color};">{subtext}</div>'
+        '</div>'
+        '</div>'
+    )
