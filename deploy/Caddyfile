@@ -1,0 +1,21 @@
+# Caddy reverse proxy configuration for AgentDrone
+# Routing for http://89.189.177.216:
+# - /sber -> Sber Design UI (Role #3) on port 8501
+# - /dev  -> Developer UI on port 8502
+
+:80 {
+    # Сбер дизайн (ветка sber)
+    handle /sber* {
+        reverse_proxy 127.0.0.1:8501
+    }
+
+    # Ветка разработчиков (ветка dev)
+    handle /dev* {
+        reverse_proxy 127.0.0.1:8502
+    }
+
+    # Редирект с корня на /sber
+    handle {
+        redir / /sber 302
+    }
+}
