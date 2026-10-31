@@ -5,13 +5,12 @@ and PPK telemetry data across team environments.
 """
 
 from __future__ import annotations
-import os
+
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
 
-from .config import find_dataset_root, PROJECT_ROOT
+from .config import find_dataset_root
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -22,16 +21,16 @@ class PlotData:
     """Represents data collected for a single cadastral plot."""
     plot_id: str
     dir_path: Path
-    rgb_images: List[Path] = field(default_factory=list)
-    multispectral_images: Dict[str, List[Path]] = field(default_factory=lambda: {
+    rgb_images: list[Path] = field(default_factory=list)
+    multispectral_images: dict[str, list[Path]] = field(default_factory=lambda: {
         'NIR': [], 'RE': [], 'R': [], 'G': []
     })
-    mrk_files: List[Path] = field(default_factory=list)
-    ppk_obs: List[Path] = field(default_factory=list)
-    ppk_nav: List[Path] = field(default_factory=list)
-    ppk_raw: List[Path] = field(default_factory=list)
-    notes: List[Path] = field(default_factory=list)
-    other_files: List[Path] = field(default_factory=list)
+    mrk_files: list[Path] = field(default_factory=list)
+    ppk_obs: list[Path] = field(default_factory=list)
+    ppk_nav: list[Path] = field(default_factory=list)
+    ppk_raw: list[Path] = field(default_factory=list)
+    notes: list[Path] = field(default_factory=list)
+    other_files: list[Path] = field(default_factory=list)
 
     @property
     def total_files(self) -> int:
@@ -65,7 +64,7 @@ class PlotData:
 class DroneDataset:
     """Unified dataset manager for AgentDrone."""
 
-    def __init__(self, root_dir: Optional[str | Path] = None):
+    def __init__(self, root_dir: str | Path | None = None):
         self.root_dir = find_dataset_root(root_dir)
 
     def is_available(self) -> bool:
@@ -75,7 +74,7 @@ class DroneDataset:
         plots = self.list_plots()
         return len(plots) > 0
 
-    def list_plots(self) -> List[str]:
+    def list_plots(self) -> list[str]:
         """List all cadastral plot IDs found in the dataset."""
         if not self.root_dir.exists():
             return []
@@ -133,11 +132,11 @@ class DroneDataset:
 
         return plot
 
-    def get_all_plots(self) -> Dict[str, PlotData]:
+    def get_all_plots(self) -> dict[str, PlotData]:
         """Retrieve data for all plots as a dictionary mapping plot_id -> PlotData."""
         return {pid: self.get_plot(pid) for pid in self.list_plots()}
 
-    def validate(self) -> Dict:
+    def validate(self) -> dict:
         """Perform validation and return comprehensive report."""
         if not self.is_available():
             return {
@@ -209,7 +208,10 @@ class DroneDataset:
             ms_count = sum(len(v) for v in p.multispectral_images.values())
             ppk_count = len(p.ppk_obs) + len(p.ppk_nav) + len(p.ppk_raw)
             size_mb = p.total_size_bytes / (1024 * 1024)
-            print(f"{pid:<18} {len(p.rgb_images):<6} {ms_count:<6} {len(p.mrk_files):<6} {ppk_count:<6} {size_mb:>8.2f}")
+            print(
+                f"{pid:<18} {len(p.rgb_images):<6} {ms_count:<6} "
+                f"{len(p.mrk_files):<6} {ppk_count:<6} {size_mb:>8.2f}"
+            )
 
         if report['issues']:
             print("\nWarnings:")
