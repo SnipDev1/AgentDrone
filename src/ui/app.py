@@ -316,7 +316,7 @@ def main():
         ["Все объекты (13)", "Только проверенные", "Ожидают проверки", "Только с рисками / Stop-Fraud", "Без рисков (ОК)"],
     )
 
-    # Current portfolio data assembly
+    # Initial portfolio data assembly to evaluate filter
     portfolio_data = get_portfolio_summary(plot_ids, st.session_state.inspected_plots)
 
     filtered_plots = []
@@ -334,6 +334,27 @@ def main():
     if not filtered_plots:
         filtered_plots = plot_ids
 
+    # 1. Safely resolve which plot is currently chosen
+    if "selected_plot_id" not in st.session_state or st.session_state["selected_plot_id"] not in filtered_plots:
+        st.session_state["selected_plot_id"] = filtered_plots[0]
+
+    current_target_id = st.session_state["selected_plot_id"]
+
+    # 2. Navigation trigger: update plot ONLY when user navigates to it ("переходит")
+    is_new_navigation = (st.session_state.get("last_visited_plot_id") != current_target_id)
+    is_not_inspected = (current_target_id not in st.session_state.inspected_plots)
+
+    if is_new_navigation or is_not_inspected:
+        with st.spinner(f"🛸 Обновление данных БПЛА по участку {normalize_cadastral_id(current_target_id)}..."):
+            cv_result, credit_obj, decision = analyze_single_plot(current_target_id)
+            st.session_state.inspected_plots[current_target_id] = (cv_result, credit_obj, decision)
+            st.session_state.last_visited_plot_id = current_target_id
+    else:
+        cv_result, credit_obj, decision = st.session_state.inspected_plots[current_target_id]
+
+    # 3. Synchronize portfolio_data with the freshly inspected plot
+    portfolio_data = get_portfolio_summary(plot_ids, st.session_state.inspected_plots)
+
     def make_plot_label(raw_id: str) -> str:
         row = next((r for r in portfolio_data if r["raw_id"] == raw_id), None)
         norm_id = normalize_cadastral_id(raw_id)
@@ -345,27 +366,20 @@ def main():
             return f"⚪ {norm_id} ({row['borrower'].split()[0]} — ожидает)"
         return norm_id
 
+    # 4. Callback on selectbox change
+    def on_plot_change():
+        st.session_state["selected_plot_id"] = st.session_state["plot_select_box"]
+
+    current_idx = filtered_plots.index(current_target_id) if current_target_id in filtered_plots else 0
     selected_raw_id = st.sidebar.selectbox(
         "Выберите кадастровый участок:",
         filtered_plots,
+        index=current_idx,
         format_func=make_plot_label,
-        index=0,
+        key="plot_select_box",
+        on_change=on_plot_change,
     )
-
-    # Navigation trigger: update plot ONLY when the user navigates to it ("переходит")
-    is_new_navigation = (st.session_state.last_visited_plot_id != selected_raw_id)
-    is_not_inspected = (selected_raw_id not in st.session_state.inspected_plots)
-
-    if is_new_navigation or is_not_inspected:
-        with st.spinner(f"🛸 Обновление данных БПЛА по участку {normalize_cadastral_id(selected_raw_id)}..."):
-            cv_result, credit_obj, decision = analyze_single_plot(selected_raw_id)
-            st.session_state.inspected_plots[selected_raw_id] = (cv_result, credit_obj, decision)
-            st.session_state.last_visited_plot_id = selected_raw_id
-        # Re-build portfolio summary with freshly inspected data and rerun to update dropdown badges
-        portfolio_data = get_portfolio_summary(plot_ids, st.session_state.inspected_plots)
-        st.rerun()
-    else:
-        cv_result, credit_obj, decision = st.session_state.inspected_plots[selected_raw_id]
+    selected_raw_id = current_target_id
 
     # Header Banner
     st.markdown(
@@ -506,6 +520,10 @@ def main():
             st.cache_data.clear()
             st.session_state.inspected_plots = {}
             st.session_state.last_visited_plot_id = None
+            if "selected_plot_id" in st.session_state:
+                del st.session_state["selected_plot_id"]
+            if "plot_select_box" in st.session_state:
+                del st.session_state["plot_select_box"]
             st.rerun()
 
     # Main Tabs
