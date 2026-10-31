@@ -104,21 +104,106 @@ def test_real_dataset_plot_ingestion():
     assert report.nadir_count == 2
 
 
+def test_cadastral_registry_and_normalization():
+    """Verify folder name normalization and registry parcel lookup."""
+    from src.ingestion.cadastral_registry import (
+        CadastralRegistry,
+        normalize_cadastral_id,
+    )
+
+    # Test folder name formatting
+    assert normalize_cadastral_id("5407055001178") == "54:07:055001:178"
+    assert normalize_cadastral_id("54191301021231") == "54:19:130102:1231"
+    assert normalize_cadastral_id("54320108708") == "54:32:010870:8"
+    assert normalize_cadastral_id("54:32:010870:8") == "54:32:010870:8"
+
+    # Test registry lookup by raw folder name
+    parcel = CadastralRegistry.get_parcel("5407055001178")
+    assert parcel is not None
+    assert parcel.cadastral_id == "54:07:055001:178"
+    assert "Тогучинский" in parcel.district_name
+    assert parcel.centroid_lat > 54.0
+    assert parcel.centroid_lon > 83.0
+    assert "ИЖС" in parcel.permitted_use
+
+    # Test Berdsk supermarket case in registry
+    berdsk_parcel = CadastralRegistry.get_parcel("54320108708")
+    assert berdsk_parcel is not None
+    assert berdsk_parcel.cadastral_id == "54:32:010870:8"
+    assert "Энгельса" in berdsk_parcel.address
+    assert berdsk_parcel.is_residential_vri is False
+
+
+def test_optical_camera_aim_projection():
+    """Verify ground projection of camera optical axis from altitude and pitch."""
+    from src.ingestion.cadastral_validator import project_camera_aim_ground
+
+    drone_lat, drone_lon = 54.8155, 83.2407
+    # 1. Nadir (-90°) -> target is directly beneath drone
+    target_lat, target_lon = project_camera_aim_ground(
+        drone_lat, drone_lon, altitude_m=30.0, pitch_deg=-90.0, yaw_deg=0.0
+    )
+    assert target_lat == drone_lat
+    assert target_lon == drone_lon
+
+    # 2. Oblique (-45°), facing North (yaw = 0°) -> offset North (higher latitude)
+    target_lat_n, target_lon_n = project_camera_aim_ground(
+        drone_lat, drone_lon, altitude_m=30.0, pitch_deg=-45.0, yaw_deg=0.0
+    )
+    assert target_lat_n > drone_lat
+    assert pytest.approx(target_lon_n, rel=1e-5) == drone_lon
+
+    # 3. Oblique (-45°), facing East (yaw = 90°) -> offset East (higher longitude)
+    target_lat_e, target_lon_e = project_camera_aim_ground(
+        drone_lat, drone_lon, altitude_m=30.0, pitch_deg=-45.0, yaw_deg=90.0
+    )
+    assert pytest.approx(target_lat_e, rel=1e-5) == drone_lat
+    assert target_lon_e > drone_lon
+
+
 def test_cadastral_validator_geofence():
     """Test geofence validation for normal and spoofed flights."""
-    # Plot center: (54.8184, 83.1632)
+    # Plot center for 5419163001661: (54.818450, 83.163300)
     normal_shots = [
-        DroneImageMeta(filename="1.jpg", file_path="1.jpg", latitude=54.81845, longitude=83.16329),
-        DroneImageMeta(filename="2.jpg", file_path="2.jpg", latitude=54.81840, longitude=83.16320),
+        DroneImageMeta(
+            filename="1.jpg",
+            file_path="1.jpg",
+            latitude=54.81845,
+            longitude=83.16329,
+            altitude_rel_m=25.0,
+            gimbal_pitch_deg=-90.0,
+            gimbal_yaw_deg=0.0,
+        ),
+        DroneImageMeta(
+            filename="2.jpg",
+            file_path="2.jpg",
+            latitude=54.81840,
+            longitude=83.16320,
+            altitude_rel_m=20.0,
+            gimbal_pitch_deg=-45.0,
+            gimbal_yaw_deg=45.0,
+        ),
     ]
     check = CadastralValidator.validate_flight_geofence("5419163001661", normal_shots)
     assert check.is_geofence_valid is True
-    assert check.max_distance_from_center_m < 50.0
+    assert check.is_correct_plot is True
+    assert check.cadastral_id == "54:19:163001:661"
+    assert "ПОДТВЕРЖДЕНО" in check.verification_status
+    assert check.distance_to_cadastre_m < 50.0
 
-    # Spoofed shot (point 1 km away)
-    spoofed_shots = normal_shots + [
-        DroneImageMeta(filename="fake.jpg", file_path="fake.jpg", latitude=54.83000, longitude=83.16320)
+    # Spoofed shot: drone took off 2 km away
+    spoofed_shots = [
+        DroneImageMeta(
+            filename="fake.jpg",
+            file_path="fake.jpg",
+            latitude=54.84000,
+            longitude=83.16320,
+            altitude_rel_m=30.0,
+            gimbal_pitch_deg=-90.0,
+        )
     ]
-    check_fake = CadastralValidator.validate_flight_geofence("5419163001661", spoofed_shots, max_radius_m=75.0)
+    check_fake = CadastralValidator.validate_flight_geofence("5419163001661", spoofed_shots)
     assert check_fake.is_geofence_valid is False
-    assert check_fake.max_distance_from_center_m > 500.0
+    assert check_fake.is_correct_plot is False
+    assert "ОШИБКА" in check_fake.verification_status
+    assert check_fake.distance_to_cadastre_m > 1000.0

@@ -18,8 +18,10 @@ echo "[2/3] Активация окружения..."
 source .venv/bin/activate
 
 echo "[3/3] Запуск Streamlit на 127.0.0.1:8501..."
-echo "Приложение доступно извне через Caddy reverse-proxy:"
-echo "-> http://89.189.177.216/"
+echo "Приложение доступно извне через защищенный Caddy reverse-proxy:"
+echo "-> https://sibkod.dmitry.dprits.ru:8443/"
+echo "-> http://sibkod.dmitry.dprits.ru (авторедирект на HTTPS)"
+echo "-> http://89.189.177.216/ (по прямому IP)"
 echo "================================================================="
 
 # Streamlit запуск с отключением CORS/XSRF для корректной работы через reverse-proxy
