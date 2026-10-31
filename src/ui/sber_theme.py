@@ -482,8 +482,14 @@ def get_sber_css() -> str:
     """
 
 
-def render_sber_header(active_objects_count: int = 13, rtk_status: str = "FIX Q=16") -> str:
+def render_sber_header(
+    active_objects_count: int = 13,
+    rtk_status: str = "FIX Q=16",
+    giga_status: str = "GigaChat-2-Pro",
+    giga_online: bool = False,
+) -> str:
     """Генерирует HTML-шапку в фирменном стиле sberbank.ru."""
+    giga_bg = "background:#EAF8ED; color:#0E7425; border: 1px solid rgba(33, 160, 56, 0.25);" if giga_online else "background:#FEF9C3; color:#854D0E; border: 1px solid rgba(234, 179, 8, 0.25);"
     return f"""
     <div class="sber-top-navbar">
         <div class="sber-brand-group">
@@ -499,12 +505,39 @@ def render_sber_header(active_objects_count: int = 13, rtk_status: str = "FIX Q=
                 <span class="sber-pulse-dot"></span>
                 <span>DJI RTK {rtk_status}</span>
             </div>
+            <div class="sber-pill-status" style="{giga_bg}">
+                <span>🤖 {giga_status}</span>
+            </div>
             <div class="sber-pill-status">
                 <span>⚡ АС «Калита» Онлайн</span>
             </div>
             <div class="sber-pill-status" style="background:#EBF5FF; color:#1D4ED8;">
                 <span>🎯 Роль #3 (Инспектор-дизайнер)</span>
             </div>
+        </div>
+    </div>
+    """
+
+
+def render_gigachat_card(summary_text: str, is_online: bool = False, model_name: str = "GigaChat-2-Pro") -> str:
+    """Генерирует карточку AI-заключения GigaChat в корпоративном стиле Сбера."""
+    status_label = f"🟢 GigaChat API ({model_name})" if is_online else "🟡 Автономный шаблонизатор"
+    status_badge_class = "sber-badge-green" if is_online else "sber-badge-yellow"
+    return f"""
+    <div class="sber-white-card" style="border-left: 6px solid var(--sber-green); margin: 16px 0 20px 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 20px;">🤖</span>
+                <strong style="font-family: var(--sber-font-display); font-size: 16px; color: var(--sber-text-primary);">
+                    Экспертное заключение ИИ-инспектора GigaChat для АС «Калита»
+                </strong>
+            </div>
+            <span class="{status_badge_class}">
+                {status_label}
+            </span>
+        </div>
+        <div style="font-size: 14px; line-height: 1.6; color: #1F2937; white-space: pre-line; background: #F8FAFC; padding: 16px; border-radius: 12px; border: 1px solid #E2E8F0;">
+{summary_text}
         </div>
     </div>
     """

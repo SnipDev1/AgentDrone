@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Акт проверки имущества № {{ data.act_number }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 15mm 15mm 15mm 15mm;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.4;
+      color: #1e293b;
+      margin: 0;
+      padding: 20px;
+      background: #fff;
+    }
+    .header {
+      border-bottom: 2px solid #21a038;
+      padding-bottom: 12px;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .bank-brand {
+      font-size: 16pt;
+      font-weight: 800;
+      color: #21a038;
+      letter-spacing: -0.5px;
+    }
+    .bank-sub {
+      font-size: 9pt;
+      color: #64748b;
+      margin-top: 2px;
+    }
+    .doc-meta {
+      text-align: right;
+      font-size: 9pt;
+      color: #475569;
+    }
+    .act-title {
+      text-align: center;
+      margin: 20px 0 15px 0;
+    }
+    .act-title h1 {
+      font-size: 14pt;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin: 0;
+      color: #0f172a;
+    }
+    .act-title .subtitle {
+      font-size: 9.5pt;
+      color: #64748b;
+      margin-top: 4px;
+    }
+    .section-title {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #0f172a;
+      background: #f1f5f9;
+      padding: 6px 10px;
+      border-left: 4px solid #21a038;
+      margin: 18px 0 10px 0;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 12px;
+      font-size: 10pt;
+    }
+    table.data-table th, table.data-table td {
+      border: 1px solid #cbd5e1;
+      padding: 6px 10px;
+      vertical-align: top;
+    }
+    table.data-table th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: #334155;
+      width: 35%;
+      text-align: left;
+    }
+    table.data-table td.val {
+      color: #0f172a;
+    }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 9pt;
+      font-weight: 700;
+    }
+    .badge-green { background: #dcfce7; color: #15803d; }
+    .badge-amber { background: #fef3c7; color: #b45309; }
+    .badge-red { background: #fee2e2; color: #b91c1c; }
+    .badge-blue { background: #dbeafe; color: #1d4ed8; }
+    .badge-purple { background: #f3e8ff; color: #7e22ce; }
+
+    .summary-box {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 12px 14px;
+      background: #fafafa;
+      margin: 12px 0;
+      font-size: 10pt;
+      line-height: 1.5;
+    }
+    .summary-box.highlight {
+      border-left: 5px solid #21a038;
+      background: #f0fdf4;
+    }
+    .summary-box.risk {
+      border-left: 5px solid #dc2626;
+      background: #fef2f2;
+    }
+
+    .photo-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .photo-card {
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      padding: 6px;
+      text-align: center;
+      background: #f8fafc;
+    }
+    .photo-card img {
+      max-width: 100%;
+      height: 160px;
+      object-fit: cover;
+      border-radius: 2px;
+    }
+    .photo-caption {
+      font-size: 8.5pt;
+      color: #475569;
+      margin-top: 5px;
+      font-weight: 500;
+    }
+
+    .signatures {
+      margin-top: 30px;
+      display: flex;
+      justify-content: space-between;
+      page-break-inside: avoid;
+    }
+    .sig-col {
+      width: 45%;
+      font-size: 9.5pt;
+    }
+    .sig-line {
+      border-bottom: 1px solid #000;
+      margin-top: 25px;
+      margin-bottom: 4px;
+    }
+    .sig-label {
+      font-size: 8pt;
+      color: #64748b;
+      text-align: center;
+    }
+    .stamp-box {
+      border: 2px dashed #21a038;
+      color: #21a038;
+      font-size: 8pt;
+      font-weight: 700;
+      padding: 8px;
+      text-align: center;
+      border-radius: 6px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ВЕРХНИЙ КОЛОНТИТУЛ -->
+  <div class="header">
+    <div>
+      <div class="bank-brand">СБЕРБАНК</div>
+      <div class="bank-sub">{{ data.branch_name }} • Управление мониторинга залогов</div>
+    </div>
+    <div class="doc-meta">
+      <strong>Приложение № 1</strong><br>
+      к Регламенту мониторинга обеспечения ИЖС<br>
+      Система учета: АС «Калита»
+    </div>
+  </div>
+
+  <!-- ЗАГОЛОВОК ДОКУМЕНТА -->
+  <div class="act-title">
+    <h1>АКТ ПРОВЕРКИ ИМУЩЕСТВА № {{ data.act_number }}</h1>
+    <div class="subtitle">Результаты мониторинга индивидуального жилищного строительства с применением БПЛА</div>
+    <div style="margin-top: 4px; font-size: 10pt; font-weight: 600;">
+      Дата составления: {{ data.act_date.strftime('%d.%m.%Y') }}
+    </div>
+  </div>
+
+  <!-- РАЗДЕЛ 1: КРЕДИТ И ЗАЕМЩИК -->
+  <div class="section-title">1. Реквизиты кредитного договора и стороны</div>
+  <table class="data-table">
+    <tr>
+      <th>Номер кредитного договора</th>
+      <td class="val"><strong>{{ data.credit.credit_id }}</strong> от {{ data.credit.credit_issue_date.strftime('%d.%m.%Y') }}</td>
+    </tr>
+    <tr>
+      <th>Заемщик (ФИО)</th>
+      <td class="val">{{ data.credit.borrower_name }}</td>
+    </tr>
+    <tr>
+      <th>Кредитная линия / Выдано</th>
+      <td class="val">{{ "{:,.0f}".format(data.credit.credit_amount) }} руб. / фактически выдано: {{ "{:,.0f}".format(data.credit.current_disbursed) }} руб.</td>
+    </tr>
+    <tr>
+      <th>Этап финансирования</th>
+      <td class="val">Транш № {{ data.credit.tranche_number }} из {{ data.credit.tranches_total }} (следующий транш: {{ "{:,.0f}".format(data.credit.next_tranche_amount) }} руб.)</td>
+    </tr>
+    <tr>
+      <th>Нормативный срок сдачи объекта</th>
+      <td class="val"><strong>{{ data.credit.construction_deadline.strftime('%d.%m.%Y') }}</strong></td>
+    </tr>
+    <tr>
+      <th>Статус платежей (Просрочка ПЗ)</th>
+      <td class="val">
+        {% if data.credit.days_overdue == 0 %}
+          <span class="badge badge-green">ПЗ = 0 дней (Платежи в графике)</span>
+        {% elif data.credit.days_overdue < 90 %}
+          <span class="badge badge-amber">Просрочка {{ data.credit.days_overdue }} дн.</span>
+        {% else %}
+          <span class="badge badge-red">Глубокая просрочка {{ data.credit.days_overdue }} дн. (NPL)</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- РАЗДЕЛ 2: ПРЕДМЕТ ЗАЛОГА -->
+  <div class="section-title">2. Параметры земельного участка и проектные характеристики</div>
+  <table class="data-table">
+    <tr>
+      <th>Кадастровый номер участка</th>
+      <td class="val"><strong>{{ data.credit.cadastral_number }}</strong></td>
+    </tr>
+    <tr>
+      <th>Адрес / Местоположение</th>
+      <td class="val">{{ data.credit.address }}</td>
+    </tr>
+    <tr>
+      <th>Вид разрешенного использования (ВРИ)</th>
+      <td class="val">{{ data.credit.land_category_vri }}</td>
+    </tr>
+    <tr>
+      <th>Проектный материал несущих стен</th>
+      <td class="val">{{ data.credit.projected_wall_material.value }}</td>
+    </tr>
+    <tr>
+      <th>Проектная площадь / Этажность</th>
+      <td class="val">{{ data.credit.planned_area_sqm }} кв. м / {{ data.credit.projected_floors }} эт.</td>
+    </tr>
+  </table>
+
+  <!-- РАЗДЕЛ 3: НАБЛЮДЕНИЯ БПЛА И ГОТОВНОСТЬ -->
+  <div class="section-title">3. Результаты аэрофотосъемки БПЛА и компьютерного зрения (CV)</div>
+  <table class="data-table">
+    <tr>
+      <th>Дата облета БПЛА / Обработано кадров</th>
+      <td class="val">{{ data.inspection.inspection_date.strftime('%d.%m.%Y') }} / {{ data.inspection.total_images_analyzed }} снимков</td>
+    </tr>
+    <tr>
+      <th>Комплектность ракурсов (ТЗ: 4+2)</th>
+      <td class="val">
+        {% if data.inspection.view_angles_complete %}
+          <span class="badge badge-green">Полный комплект (4 фасада + 2 надира)</span>
+        {% else %}
+          <span class="badge badge-amber">Неполный комплект ракурсов</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Геопривязка к кадастру (&lt; 50 м)</th>
+      <td class="val">
+        {% if data.inspection.geo_match %}
+          <span class="badge badge-green">Подтверждена (RTK позиционирование)</span>
+        {% else %}
+          <span class="badge badge-red">Расхождение координат съемки</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Конструктивные элементы</th>
+      <td class="val">
+        Фундамент: {{ "Да" if data.inspection.elements.foundation else "Нет" }} |
+        Стены: {{ "Да" if data.inspection.elements.walls else "Нет" }} |
+        Кровля: {{ "Да" if data.inspection.elements.roof else "Нет" }} |
+        Окна/двери: {{ "Да" if data.inspection.elements.windows_doors else "Нет" }}
+      </td>
+    </tr>
+    <tr>
+      <th>Фактическая готовность (CV)</th>
+      <td class="val">
+        <strong>{{ "%.1f"|format(data.inspection.physical_readiness_pct) }}%</strong>
+        ({{ data.inspection.stage.value }})
+      </td>
+    </tr>
+    <tr>
+      <th>Фактический материал стен (CV)</th>
+      <td class="val">
+        <strong>{{ data.inspection.detected_wall_material.value }}</strong>
+        {% if data.inspection.material_match %}
+          <span class="badge badge-green" style="margin-left: 6px;">Соответствует проекту</span>
+        {% else %}
+          <span class="badge badge-red" style="margin-left: 6px;">Не соответствует смете!</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Градостроительный отступ 3 м (ст. 222 ГК РФ)</th>
+      <td class="val">
+        {% if data.inspection.boundary_violation %}
+          <span class="badge badge-red">Нарушен: менее 3.0 м (риск признания самостроем)</span>
+        {% else %}
+          <span class="badge badge-green">Соблюден ({{ data.inspection.distance_to_boundary_m or '>= 3.0' }} м)</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- РАЗДЕЛ 4: ДЕФЕКТЫ -->
+  <div class="section-title">4. Ведомость выявленных строительных дефектов и рисков</div>
+  {% if data.inspection.defects %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th style="width: 25%;">Тип дефекта</th>
+          <th style="width: 20%;">Критичность</th>
+          <th style="width: 55%;">Описание и предписания</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for defect in data.inspection.defects %}
+          <tr>
+            <td>{{ defect.defect_type }}</td>
+            <td>
+              {% if defect.severity == 'CRITICAL' %}
+                <span class="badge badge-red">Критический</span>
+              {% elif defect.severity == 'HIGH' %}
+                <span class="badge badge-amber">Высокий</span>
+              {% else %}
+                <span class="badge badge-blue">Умеренный</span>
+              {% endif %}
+            </td>
+            <td>{{ defect.description }} {% if defect.recommendation %}<br><em>Рекомендация: {{ defect.recommendation }}</em>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div style="font-size: 10pt; color: #15803d; padding: 6px 0;">Критических конструктивных дефектов и разрушений не выявлено. Объект находится в стабильном состоянии.</div>
+  {% endif %}
+
+  <!-- РАЗДЕЛ 5: ЗАКЛЮЧЕНИЕ И СТРАТЕГИЯ -->
+  <div class="section-title">5. Экспертное заключение и решение Decision Engine</div>
+  <table class="data-table">
+    <tr>
+      <th>Рекомендованная стратегия Банка</th>
+      <td class="val">
+        {% if data.recommendation.strategy.name == 'TRANCHE_APPROVAL' %}
+          <span class="badge badge-green">{{ data.recommendation.strategy.value }}</span>
+        {% elif data.recommendation.strategy.name == 'RESTRUCTURING' %}
+          <span class="badge badge-amber">{{ data.recommendation.strategy.value }}</span>
+        {% elif data.recommendation.strategy.name == 'PLEDGE_REGISTRATION' %}
+          <span class="badge badge-blue">{{ data.recommendation.strategy.value }}</span>
+        {% elif data.recommendation.strategy.name == 'FRAUD_ALERT' %}
+          <span class="badge badge-purple">{{ data.recommendation.strategy.value }}</span>
+        {% else %}
+          <span class="badge badge-red">{{ data.recommendation.strategy.value }}</span>
+        {% endif %}
+        (Код: {{ data.recommendation.decision_code }})
+      </td>
+    </tr>
+    <tr>
+      <th>Итоговое состояние обеспечения</th>
+      <td class="val">
+        {% if data.condition.name == 'SATISFACTORY' %}
+          <span class="badge badge-green">{{ data.condition.value }}</span>
+        {% else %}
+          <span class="badge badge-red">{{ data.condition.value }}</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Уровень риска / Автоматизация</th>
+      <td class="val">
+        {{ data.recommendation.risk_level.value }} |
+        {% if data.recommendation.is_automated %}
+          <strong>Автосогласование STP (без ручной комиссии)</strong>
+        {% else %}
+          Требуется ручное решение уполномоченного лица
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <!-- ЭКСПЕРТНОЕ РЕЗЮМЕ ДЛЯ АС КАЛИТА -->
+  <div class="summary-box {% if data.recommendation.risk_level.name in ['HIGH', 'CRITICAL'] %}risk{% else %}highlight{% endif %}">
+    <strong>Резюме для загрузки в карточку объекта АС «Калита»:</strong><br>
+    {{ data.recommendation.summary }}
+  </div>
+
+  <div style="font-size: 9.5pt; margin-top: 8px;">
+    <strong>Предписанные действия:</strong>
+    <ul style="margin: 4px 0 0 16px; padding: 0;">
+      {% for action in data.recommendation.action_items %}
+        <li>{{ action }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <!-- ФОТОТАБЛИЦА -->
+  {% if data.photos %}
+    <div class="section-title" style="page-break-before: always;">6. Фототаблица подтверждающих материалов БПЛА</div>
+    <div class="photo-grid">
+      {% for photo in data.photos %}
+        <div class="photo-card">
+          <img src="{{ photo.file_path }}" alt="{{ photo.caption }}">
+          <div class="photo-caption">{{ photo.caption }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <!-- ПОДПИСИ -->
+  <div class="signatures">
+    <div class="sig-col">
+      <div><strong>Инспектор залоговой службы:</strong></div>
+      <div style="font-size: 8.5pt; color: #475569; margin-top: 2px;">{{ data.inspector_position }}</div>
+      <div class="sig-line"></div>
+      <div class="sig-label">/ {{ data.inspector_name }} /</div>
+    </div>
+    <div class="sig-col" style="text-align: right;">
+      <div class="stamp-box">
+        ЭЛЕКТРОННО ПОДПИСАНО В АС «КАЛИТА»<br>
+        Сертификат: ПАО СБЕРБАНК ИЖС-БПЛА-2026<br>
+        Дата и время фиксации: {{ data.act_date.strftime('%d.%m.%Y') }} 12:00 UTC+7
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
