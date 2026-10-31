@@ -1,0 +1,22 @@
+# Core & Validation
+pydantic>=2.5.0
+jinja2>=3.1.2
+
+# Computer Vision & Geo
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+exifread>=3.0.0
+
+# Sber Ecosystem / LLM
+gigachat>=0.1.25
+
+# Web UI & Visualization
+streamlit>=1.30.0
+folium>=0.15.0
+streamlit-folium>=0.16.0
+
+# Testing & Quality Guardrails (хакатон оценивает качество кода!)
+pytest>=7.4.0
+flake8>=6.1.0
+pytest-mock>=3.12.0
