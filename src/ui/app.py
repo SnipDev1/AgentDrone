@@ -404,6 +404,11 @@ def main():
             else:
                 st.warning("⚠️ Ошибка авторизации. Работает Fallback-режим.")
 
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Очистить кэш аналитики", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
     # Main Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "🛸 Инспекция БПЛА & CV Анализ",
