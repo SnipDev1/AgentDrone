@@ -71,11 +71,20 @@ class CompletenessReport(BaseModel):
 class CadastralGeoCheck(BaseModel):
     """Cadastral geofencing and coordinate verification."""
     cadastral_id: str
+    raw_folder_name: str = ""
     drone_center_lat: float
     drone_center_lon: float
+    registry_lat: float | None = None
+    registry_lon: float | None = None
+    registry_address: str | None = None
+    registry_vri: str | None = None
+    distance_to_cadastre_m: float = 0.0
+    mean_camera_aim_dist_m: float = 0.0
     max_distance_from_center_m: float = 0.0
     is_geofence_valid: bool = True
     within_allowed_radius: bool = True
+    is_correct_plot: bool = True
+    verification_status: str = "ПОДТВЕРЖДЕНО"
     notes: str = "Координаты подтверждены"
 
 
