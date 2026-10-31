@@ -24,36 +24,71 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import src.config as _mod_cfg  # noqa: E402
 import src.cv.boundary_overlay as _mod_bo  # noqa: E402
 import src.cv.feature_extractor as _mod_fe  # noqa: E402
 import src.cv.fraud_detector as _mod_fd  # noqa: E402
 import src.cv.material_classifier as _mod_mc  # noqa: E402
+import src.cv.multispectral as _mod_ms  # noqa: E402
 import src.cv.pipeline as _mod_cp  # noqa: E402
 import src.cv.readiness_classifier as _mod_rc  # noqa: E402
+import src.dataset as _mod_ds  # noqa: E402
 import src.dataset_manager as _mod_dm  # noqa: E402
 import src.engine.decision_engine as _mod_de  # noqa: E402
 import src.gigachat_service as _mod_gp  # noqa: E402
+import src.gigachat_service.prompts as _mod_gprompts  # noqa: E402
 import src.gigachat_service.service as _mod_gs  # noqa: E402
+import src.ingestion as _mod_ing  # noqa: E402
+import src.ingestion.angle_detector as _mod_ad  # noqa: E402
 import src.ingestion.cadastral_registry as _mod_cr  # noqa: E402
+import src.ingestion.cadastral_validator as _mod_cv  # noqa: E402
+import src.ingestion.credit_registry as _mod_cred_reg  # noqa: E402
+import src.ingestion.notes_parser as _mod_np  # noqa: E402
+import src.ingestion.ppk_parser as _mod_ppk  # noqa: E402
+import src.ingestion.telemetry_parser as _mod_tp  # noqa: E402
+import src.models as _mod_models  # noqa: E402
+import src.models.credit as _mod_mcred  # noqa: E402
+import src.models.inspection as _mod_minsp  # noqa: E402
+import src.models.schemas as _mod_mschemas  # noqa: E402
+import src.models.strategy as _mod_mstrat  # noqa: E402
 import src.report as _mod_rp  # noqa: E402
 import src.report.builder as _mod_rb  # noqa: E402
+import src.report.generator as _mod_rg  # noqa: E402
 import src.ui.sber_theme as _mod_st  # noqa: E402
 
-if getattr(sys, "_agentdrone_reloaded_v9", False) is False:
+if getattr(sys, "_agentdrone_reloaded_v18", False) is False:
+    if "pytest" not in sys.modules:
+        for _m_schema in (_mod_mschemas, _mod_mcred, _mod_minsp, _mod_mstrat, _mod_models):
+            try:
+                importlib.reload(_m_schema)
+            except Exception:
+                pass
     for _m in (
+        _mod_cfg,
         _mod_st,
+        _mod_cr,
+        _mod_cred_reg,
+        _mod_tp,
+        _mod_ad,
+        _mod_cv,
+        _mod_np,
+        _mod_ppk,
+        _mod_ing,
         _mod_de,
+        _mod_gprompts,
         _mod_gs,
         _mod_gp,
-        _mod_cr,
         _mod_fe,
         _mod_rc,
         _mod_mc,
         _mod_fd,
+        _mod_ms,
         _mod_cp,
         _mod_bo,
         _mod_dm,
+        _mod_ds,
         _mod_rb,
+        _mod_rg,
         _mod_rp,
     ):
         try:
@@ -64,7 +99,7 @@ if getattr(sys, "_agentdrone_reloaded_v9", False) is False:
         st.cache_data.clear()
     except Exception:
         pass
-    sys._agentdrone_reloaded_v9 = True  # type: ignore[attr-defined]
+    sys._agentdrone_reloaded_v18 = True  # type: ignore[attr-defined]
 
 from src.cv.boundary_overlay import BoundaryOverlay  # noqa: E402
 from src.cv.pipeline import CVPipeline  # noqa: E402
@@ -277,23 +312,30 @@ def build_plot_summary(
     pid: str,
     inspected: tuple[CVInspectionResult, CreditObject | None, StrategyRecommendation] | None = None,
 ) -> dict:
-    """Assemble a summary row for a plot (lazy-loaded if not yet inspected)."""
+    """Assemble a summary row for a plot strictly from customer CSV fields and CV results."""
     if inspected is not None:
         cv_res, cred, dec = inspected
         return {
             "raw_id": pid,
             "cadastral_id": cv_res.cadastral_id,
-            "borrower": cred.borrower_name if cred else "Н/Д",
             "address": cred.address if cred else "Н/Д",
-            "credit_amount": cred.credit_amount_rub if cred else 0.0,
+            "planned_date": getattr(cred, "planned_completion_date", "Нет") if cred else "Нет",
+            "actual_date": getattr(cred, "actual_completion_date", "Нет") if cred else "Нет",
+            "has_pz": getattr(cred, "has_pz", "Нет") if cred else "Нет",
+            "is_registered": getattr(cred, "is_registered", "Нет") if cred else "Нет",
+            "is_pledged": getattr(cred, "is_pledged", "Нет") if cred else "Нет",
+            "start_date": getattr(cred, "construction_start_date", "Нет") if cred else "Нет",
+            "has_aerial_photo": getattr(cred, "has_aerial_photo", "Да") if cred else "Да",
             "readiness_pct": cv_res.readiness_pct,
             "stage": cv_res.readiness_stage,
             "material": cv_res.detected_material.value,
             "strategy": dec.strategy.value,
             "strategy_code": dec.strategy_code,
             "risk_level": dec.risk_level,
+            "borrower": getattr(cred, "borrower_name", "") if cred else "",
+            "credit_amount": getattr(cred, "credit_amount_rub", 0.0) if cred else 0.0,
             "fraud_flag": cv_res.fraud_risk_flag,
-            "days_overdue": cred.days_overdue if cred else 0,
+            "days_overdue": getattr(cred, "days_overdue", 0) if cred else 0,
             "kalita_status": dec.kalita_status,
             "is_inspected": True,
         }
@@ -307,17 +349,24 @@ def build_plot_summary(
             if cred
             else (parcel.cadastral_id if parcel else normalize_cadastral_id(pid))
         ),
-        "borrower": cred.borrower_name if cred else "Индивидуальный заемщик ИЖС",
         "address": cred.address if cred else (parcel.address if parcel else "Н/Д"),
-        "credit_amount": cred.credit_amount_rub if cred else 0.0,
+        "planned_date": cred.planned_completion_date if cred else "Нет",
+        "actual_date": cred.actual_completion_date if cred else "Нет",
+        "has_pz": cred.has_pz if cred else "Нет",
+        "is_registered": cred.is_registered if cred else "Нет",
+        "is_pledged": cred.is_pledged if cred else "Нет",
+        "start_date": cred.construction_start_date if cred else "Нет",
+        "has_aerial_photo": cred.has_aerial_photo if cred else "Да",
         "readiness_pct": None,
         "stage": "—",
-        "material": cred.declared_wall_material if cred else "Не проверено",
+        "material": "Не проверено",
         "strategy": "Ожидает выбора участка",
         "strategy_code": "ОЖИДАЕТ",
         "risk_level": "PENDING",
+        "borrower": getattr(cred, "borrower_name", "") if cred else "",
+        "credit_amount": getattr(cred, "credit_amount_rub", 0.0) if cred else 0.0,
         "fraud_flag": False,
-        "days_overdue": cred.days_overdue if cred else 0,
+        "days_overdue": getattr(cred, "days_overdue", 0) if cred else 0,
         "kalita_status": "Ожидает инспекции",
         "is_inspected": False,
     }
@@ -468,7 +517,7 @@ def build_inspection_folium_map(
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  html, body, #map {{ margin: 0; padding: 0; width: 100%; height: 440px; border-radius: 6px; }}
+  html, body, #map {{ margin: 0; padding: 0; width: 100%; height: 460px; border-radius: 6px; }}
   .cad-tooltip {{
     background: rgba(15, 23, 42, 0.9); color: #fff; border: 1px solid #DC2626;
     font-family: sans-serif; font-size: 12px; font-weight: 600; padding: 3px 7px;
@@ -478,18 +527,33 @@ def build_inspection_folium_map(
 <body>
 <div id="map"></div>
 <script>
-  const map = L.map('map').setView([{center_lat}, {center_lon}], 18);
-  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-    maxZoom: 20,
+  const map = L.map('map', {{ maxZoom: 19 }}).setView([{center_lat}, {center_lon}], 18);
+  const osmLayer = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+    maxNativeZoom: 19,
+    maxZoom: 19,
     attribution: '&copy; OpenStreetMap | ППК Росреестр'
-  }}).addTo(map);
+  }});
+  const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+    maxNativeZoom: 18,
+    maxZoom: 19,
+    attribution: 'Esri Satellite | ППК Росреестр'
+  }});
+  satLayer.addTo(map);
+  osmLayer.setOpacity(0.35).addTo(map);
+  L.control.layers(
+    {{ "Спутник + Дома (Гибрид)": satLayer, "Карта домов и улиц (OSM)": osmLayer }},
+    {{}},
+    {{ position: 'topright' }}
+  ).addTo(map);
   const polyCoords = {poly_json};
   if (polyCoords.length >= 3) {{
     const poly = L.polygon(polyCoords, {{
-      color: '{stroke_color}', weight: 3, fillColor: '{stroke_color}', fillOpacity: 0.14
+      color: '{stroke_color}', weight: 3, fillColor: '{stroke_color}', fillOpacity: 0.16
     }}).addTo(map);
     poly.bindTooltip('Росреестр: {cad_label}', {{permanent: true, className: 'cad-tooltip'}});
-    map.fitBounds(poly.getBounds().pad(0.35));
+    map.fitBounds(poly.getBounds(), {{ maxZoom: 18, padding: [40, 40] }});
+  }} else {{
+    map.setView([{center_lat}, {center_lon}], 18);
   }}
   const markers = {markers_json};
   markers.forEach((m, i) => {{
@@ -526,29 +590,33 @@ def main() -> None:
         st.markdown("### Объекты мониторинга")
 
         if plot_ids:
+            if (
+                "selected_plot_id" not in st.session_state
+                or st.session_state["selected_plot_id"] not in plot_ids
+            ):
+                st.session_state["selected_plot_id"] = plot_ids[0]
+
             plot_labels = {}
             for pid in plot_ids:
                 cred = CreditRegistry.get_credit_object(pid)
                 cad_str = cred.cadastral_id if cred else normalize_cadastral_id(pid)
                 is_done = pid in st.session_state["inspected_plots"]
                 status_tag = "[Проверен]" if is_done else ""
-                borrower_short = (cred.borrower_name.split()[0] if cred else "Объект ИЖС")
-                plot_labels[pid] = f"{cad_str} — {borrower_short} {status_tag}".strip()
-
-            default_idx = 0
-            if (
-                "selected_plot_id" in st.session_state
-                and st.session_state["selected_plot_id"] in plot_ids
-            ):
-                default_idx = plot_ids.index(st.session_state["selected_plot_id"])
+                addr_short = (
+                    cred.address[:28] + "…"
+                    if (cred and len(cred.address) > 28)
+                    else (cred.address if cred else "")
+                )
+                plot_labels[pid] = (
+                    f"{cad_str} {('— ' + addr_short) if addr_short else ''} {status_tag}".strip()
+                )
 
             selected_plot_id = st.selectbox(
                 "Выберите кадастровый участок:",
                 options=plot_ids,
                 format_func=lambda x: plot_labels.get(x, x),
-                index=default_idx,
+                key="selected_plot_id",
             )
-            st.session_state["selected_plot_id"] = selected_plot_id
 
             col_del1, col_del2 = st.columns(2)
             with col_del1:
@@ -601,6 +669,21 @@ def main() -> None:
                 )
                 if st.button("Распаковать ZIP на сервер", type="primary", use_container_width=True):
                     handle_upload_zip(up_zip, target_plot_id=zip_cad_id)
+
+        with st.expander("Реестр объектов (.xlsx / .csv)", expanded=False):
+            up_reg = st.file_uploader(
+                "Обновить таблицу реестра:",
+                type=["xlsx", "csv"],
+                key="sb_reg_uploader",
+            )
+            if up_reg is not None and st.button("Применить реестр", use_container_width=True):
+                try:
+                    cnt = CreditRegistry.update_from_file_bytes(up_reg.getvalue(), up_reg.name)
+                    st.cache_data.clear()
+                    st.toast(f"Загружено записей реестра: {cnt}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Ошибка загрузки реестра: {exc}")
 
         with st.expander("Настройки GigaChat API", expanded=False):
             st.caption(
@@ -655,9 +738,9 @@ def main() -> None:
     with k1:
         _render_html(
             render_kpi_card(
-                title="Кадастровый номер ЗУ",
+                title="Кадастровый номер",
                 value=cv_result.cadastral_id,
-                subtext=f"Площадь Росреестр: {parcel.area_sqm:,.0f} м²" if parcel else "Данные БПЛА",
+                subtext=(credit_obj.address if credit_obj else (parcel.address if parcel else "Н/Д")),
                 icon_type="satellite",
                 is_success=cv_result.geocheck.is_geofence_valid,
                 is_danger=not cv_result.geocheck.is_geofence_valid,
@@ -668,7 +751,7 @@ def main() -> None:
             render_kpi_card(
                 title="Стадия и готовность (CV)",
                 value=f"{cv_result.readiness_pct}% (Стадия {cv_result.readiness_stage}%)",
-                subtext=cv_result.stage_title,
+                subtext=f"{cv_result.stage_title} • {cv_result.detected_material.value}",
                 icon_type="chart",
                 is_success=(cv_result.readiness_stage == 100),
                 is_warning=(cv_result.readiness_stage == 50),
@@ -677,44 +760,30 @@ def main() -> None:
     with k3:
         _render_html(
             render_kpi_card(
-                title="Материал стен / Конструктив",
-                value=cv_result.detected_material.value,
+                title="Сроки строительства",
+                value=f"План: {credit_obj.planned_completion_date if credit_obj else 'Нет'}",
                 subtext=(
-                    f"План по договору: {credit_obj.declared_wall_material if credit_obj else 'ИЖС'} "
-                    f"(достоверность {int(cv_result.material_confidence * 100)}%)"
+                    f"Начало: {credit_obj.construction_start_date if credit_obj else 'Нет'} • "
+                    f"Факт: {credit_obj.actual_completion_date if credit_obj else 'Нет'}"
                 ),
                 icon_type="drone",
-                is_success=not cv_result.fraud_risk_flag,
-                is_danger=cv_result.fraud_risk_flag,
+                is_success=True,
             )
         )
     with k4:
+        has_pz_str = credit_obj.has_pz if credit_obj else "Нет"
         _render_html(
             render_kpi_card(
-                title="Решение Decision Engine",
-                value=decision_result.strategy_code,
-                subtext=decision_result.strategy.value,
-                icon_type="shield_alert" if cv_result.fraud_risk_flag else "check_circle",
-                is_success=(decision_result.risk_level == "LOW"),
-                is_warning=(decision_result.risk_level in ("MEDIUM", "HIGH")),
-                is_danger=(decision_result.risk_level == "CRITICAL"),
+                title="ПЗ / Регистрация / Залог",
+                value=f"ПЗ: {has_pz_str}",
+                subtext=(
+                    f"ОН зарег.: {credit_obj.is_registered if credit_obj else 'Нет'} • "
+                    f"Залог: {credit_obj.is_pledged if credit_obj else 'Нет'}"
+                ),
+                icon_type="check_circle",
+                is_success=(has_pz_str.lower() != "да"),
+                is_warning=(has_pz_str.lower() == "да"),
             )
-        )
-
-    # Alert Banner if Stop-Fraud triggered
-    if cv_result.fraud_risk_flag:
-        reasons_html = "".join(f"<li>{r}</li>" for r in cv_result.fraud_reasons)
-        _render_html(
-            f"""
-            <div class="sber-fraud-alert">
-                <div class="sber-fraud-title">
-                    СТОП-ФРОД: ВЫЯВЛЕНЫ КРИТИЧЕСКИЕ НАРУШЕНИЯ ОБЕСПЕЧЕНИЯ ({cv_result.cadastral_id})
-                </div>
-                <ul style="margin:4px 0 0 18px; padding:0; font-size:0.86rem;">
-                    {reasons_html}
-                </ul>
-            </div>
-            """
         )
 
     # Workspace Navigation Tabs (4 clean, non-AI functional tabs)
@@ -754,6 +823,7 @@ def main() -> None:
                     ],
                     horizontal=True,
                     label_visibility="collapsed",
+                    key=f"view_mode_{selected_plot_id}",
                 )
 
                 if view_mode == "Детальный просмотр выбранного кадра":
@@ -773,6 +843,7 @@ def main() -> None:
                         "Выберите кадр для инспекции:",
                         options=shot_options,
                         format_func=_fmt_shot,
+                        key=f"shot_idx_{selected_plot_id}",
                     )
                     img_path, meta = paired_shots[sel_idx]
 
@@ -874,47 +945,37 @@ def main() -> None:
                 """
             )
 
-            # 2. Official Rosreestr / NSPD Cadastral Passport
-            if parcel:
-                vri_pill = (
-                    '<span class="ws-status-pill ws-status-ok">Целевой (ИЖС / Садоводство)</span>'
-                    if parcel.is_residential_vri
-                    else '<span class="ws-status-pill ws-status-err">Конфликт ВРИ (Нецелевое)</span>'
-                )
-                _render_html(
-                    f"""
-                    <div class="ws-panel">
-                        <div class="ws-panel-header">
-                            <span>Сведения ППК Росреестр / ФГИС ЕЦП НСПД</span>
-                            <span>{len(parcel.polygon_wgs84 or [])} тчк.</span>
-                        </div>
-                        <div class="ws-kv-grid">
-                            <div class="ws-kv-label">Кадастровый номер:</div>
-                            <div class="ws-kv-val">{parcel.cadastral_id}</div>
-                            <div class="ws-kv-label">Адрес (НСПД):</div>
-                            <div class="ws-kv-val">{parcel.address}</div>
-                            <div class="ws-kv-label">Площадь ЗУ:</div>
-                            <div class="ws-kv-val">{parcel.area_sqm:,.0f} м²</div>
-                            <div class="ws-kv-label">Кадастровая ст-ть:</div>
-                            <div class="ws-kv-val">{parcel.cadastral_value_rub:,.2f} ₽</div>
-                            <div class="ws-kv-label">Разрешенное исп.:</div>
-                            <div class="ws-kv-val">{parcel.permitted_use}</div>
-                            <div class="ws-kv-label">Статус ВРИ:</div>
-                            <div class="ws-kv-val">{vri_pill}</div>
-                            <div class="ws-kv-label">Центроид (WGS-84):</div>
-                            <div class="ws-kv-val">{parcel.centroid_lat:.6f}, {parcel.centroid_lon:.6f}</div>
-                        </div>
+            # 2. Customer Registry Object Data (strictly matching CSV columns)
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Данные по объекту из реестра</span>
+                        <span>{cv_result.cadastral_id}</span>
                     </div>
-                    """
-                )
-                if st.button("Запросить актуальную выписку из НСПД / Росреестра", use_container_width=True):
-                    fetched = CadastralRegistry.fetch_from_rosreestr_api(parcel.cadastral_id, timeout=4.0)
-                    clear_all_caches()
-                    if fetched:
-                        st.toast(f"Данные Росреестра для {parcel.cadastral_id} обновлены онлайн.")
-                    else:
-                        st.toast(f"Использован локальный гео-кэш Росреестра для {parcel.cadastral_id}.")
-                    st.rerun()
+                    <div class="ws-kv-grid">
+                        <div class="ws-kv-label">Территория:</div>
+                        <div class="ws-kv-val">{credit_obj.address if credit_obj else (parcel.address if parcel else "Н/Д")}</div>
+                        <div class="ws-kv-label">Кадастровый номер:</div>
+                        <div class="ws-kv-val">{cv_result.cadastral_id}</div>
+                        <div class="ws-kv-label">Дата начала стр-ва:</div>
+                        <div class="ws-kv-val">{credit_obj.construction_start_date if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">Плановая дата:</div>
+                        <div class="ws-kv-val">{credit_obj.planned_completion_date if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">Фактическая дата:</div>
+                        <div class="ws-kv-val">{credit_obj.actual_completion_date if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">Наличие ПЗ:</div>
+                        <div class="ws-kv-val">{credit_obj.has_pz if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">ОН зарегистрирован:</div>
+                        <div class="ws-kv-val">{credit_obj.is_registered if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">Залог:</div>
+                        <div class="ws-kv-val">{credit_obj.is_pledged if credit_obj else "Нет"}</div>
+                        <div class="ws-kv-label">Наличие фото с неба:</div>
+                        <div class="ws-kv-val">{credit_obj.has_aerial_photo if credit_obj else "Да"}</div>
+                    </div>
+                </div>
+                """
+            )
 
             # 3. Decision Engine Action Box
             steps_html = "".join(f"<li>{s}</li>" for s in decision_result.reasoning)
@@ -1112,6 +1173,7 @@ def main() -> None:
             mime="text/html",
             type="primary",
             use_container_width=True,
+            key=f"download_act_{selected_plot_id}",
         )
 
         components.html(html_report, height=760, scrolling=True)
@@ -1193,22 +1255,25 @@ def main() -> None:
         for item in portfolio_data:
             raw_pid = item["raw_id"]
             p_stats = ParcelManager.get_plot_stats(raw_pid)
-            r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns([2.2, 2.5, 1.8, 1.2, 1.0])
+            r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns([2.0, 2.7, 2.0, 1.2, 1.0])
             with r_c1:
                 st.markdown(f"**{item['cadastral_id']}**")
                 st.caption(f"Папка: `{raw_pid}` ({p_stats['rgb_count']} фото, {p_stats['size_mb']} МБ)")
             with r_c2:
-                st.markdown(f"{item['borrower']}")
-                st.caption(f"{item['address']}")
+                st.markdown(f"{item['address']}")
+                st.caption(
+                    f"Начало: {item['start_date']} • План: {item['planned_date']} • Факт: {item['actual_date']}"
+                )
             with r_c3:
+                st.caption(
+                    f"ПЗ: {item['has_pz']} | ОН зарег.: {item['is_registered']} | Залог: {item['is_pledged']} | Фото: {item['has_aerial_photo']}"
+                )
                 if item["is_inspected"]:
                     st.markdown(
                         f"Готовность: **{item['readiness_pct']}%** (Стадия {item['stage']}%)"
                     )
-                    st.caption(f"Материал: {item['material']} • {item['strategy_code']}")
                 else:
                     st.markdown("Статус: *Ожидает осмотра*")
-                    st.caption(f"План: {item['material']}")
             with r_c4:
                 if st.button("Открыть", key=f"open_{raw_pid}", use_container_width=True):
                     st.session_state["selected_plot_id"] = raw_pid

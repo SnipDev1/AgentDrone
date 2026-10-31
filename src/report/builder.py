@@ -64,33 +64,48 @@ def build_act_from_cv(
     else:
         cadastral_num = "54:00:000000:1"
 
-    proj_mat_str = getattr(credit_obj, "declared_wall_material", "Кирпич")
+    proj_mat_raw = getattr(credit_obj, "declared_wall_material", None) or "Кирпич"
+    proj_mat_val = (
+        proj_mat_raw.value if hasattr(proj_mat_raw, "value")
+        else getattr(proj_mat_raw, "name", str(proj_mat_raw or ""))
+    )
+    proj_mat_key = f"{proj_mat_val} {getattr(proj_mat_raw, 'name', '')}".lower()
     proj_mat_enum = WallMaterial.BRICK
-    if "блок" in proj_mat_str.lower() or "газобетон" in proj_mat_str.lower():
+    if any(k in proj_mat_key for k in ("блок", "газобетон", "пеноблок", "gas_concrete", "concrete_block", "сибит")):
         proj_mat_enum = WallMaterial.CONCRETE_BLOCK
-    elif "дерев" in proj_mat_str.lower() or "брус" in proj_mat_str.lower():
+    elif any(k in proj_mat_key for k in ("дерев", "брус", "бревн", "timber")):
         proj_mat_enum = WallMaterial.TIMBER
-    elif "щит" in proj_mat_str.lower() or "каркас" in proj_mat_str.lower() or "sip" in proj_mat_str.lower():
+    elif any(k in proj_mat_key for k in ("щит", "каркас", "frame", "sip", "панел")):
         proj_mat_enum = WallMaterial.FRAME_PANEL
+    elif any(k in proj_mat_key for k in ("сэндвич", "sandwich")):
+        proj_mat_enum = WallMaterial.FRAME_PANEL
+    elif any(k in proj_mat_key for k in ("кирпич", "brick")):
+        proj_mat_enum = WallMaterial.BRICK
 
-    credit_amount = float(getattr(credit_obj, "credit_amount_rub", 6000000.0))
+    credit_amount = float(getattr(credit_obj, "credit_amount_rub", 0.0) or 1.0)
     tranche_no = int(getattr(credit_obj, "tranche_number", 1))
     tranches_tot = int(getattr(credit_obj, "total_tranches", 3))
     next_tranche = credit_amount / float(tranches_tot)
 
-    try:
-        deadline_raw = getattr(credit_obj, "planned_completion_date", "2027-01-01")
-        if isinstance(deadline_raw, str):
-            deadline_date = datetime.strptime(deadline_raw, "%Y-%m-%d").date()
-        else:
-            deadline_date = deadline_raw
-    except Exception:
-        deadline_date = date(2027, 4, 30)
+    deadline_raw = getattr(credit_obj, "planned_completion_date", "Нет")
+    deadline_date = date(2027, 4, 30)
+    if isinstance(deadline_raw, str):
+        for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+            try:
+                deadline_date = datetime.strptime(deadline_raw, fmt).date()
+                break
+            except Exception:
+                continue
+    elif isinstance(deadline_raw, date):
+        deadline_date = deadline_raw
+
+    borrower_str = str(getattr(credit_obj, "borrower_name", "") or "").strip()
+    is_minimal = not bool(borrower_str)
 
     credit = CreditObject(
-        credit_id=getattr(credit_obj, "credit_agreement_number", "CR-2026-001"),
+        credit_id=getattr(credit_obj, "credit_agreement_number", "") or "Н/Д",
         cadastral_number=cadastral_num,
-        borrower_name=getattr(credit_obj, "borrower_name", "Заемщик"),
+        borrower_name=borrower_str or "Н/Д",
         credit_amount=credit_amount,
         current_disbursed=(credit_amount / float(tranches_tot)) * tranche_no,
         tranche_number=tranche_no,
@@ -101,6 +116,14 @@ def build_act_from_cv(
         days_overdue=int(getattr(credit_obj, "days_overdue", 0)),
         projected_wall_material=proj_mat_enum,
         address=getattr(credit_obj, "address", "Новосибирская область"),
+        construction_start_date=str(getattr(credit_obj, "construction_start_date", "Нет")),
+        planned_completion_date_str=str(deadline_raw),
+        actual_completion_date_str=str(getattr(credit_obj, "actual_completion_date", "Нет")),
+        has_pz=str(getattr(credit_obj, "has_pz", "Нет")),
+        is_registered=str(getattr(credit_obj, "is_registered", "Нет")),
+        is_pledged=str(getattr(credit_obj, "is_pledged", "Нет")),
+        has_aerial_photo=str(getattr(credit_obj, "has_aerial_photo", "Да")),
+        is_minimal_schema=is_minimal,
     )
 
     # 2. Map Inspection
@@ -113,14 +136,24 @@ def build_act_from_cv(
         windows_doors=getattr(elems_obj, "has_windows_doors", False),
     )
 
-    det_mat_str = str(getattr(cv_result, "detected_material", "Кирпич"))
+    det_mat_obj = getattr(cv_result, "detected_material", "Кирпич")
+    det_mat_val = (
+        det_mat_obj.value if hasattr(det_mat_obj, "value")
+        else getattr(det_mat_obj, "name", str(det_mat_obj or ""))
+    )
+    combined_mat_key = f"{det_mat_val} {getattr(det_mat_obj, 'name', '')}".lower()
+
     det_mat_enum = WallMaterial.BRICK
-    if "блок" in det_mat_str.lower() or "газобетон" in det_mat_str.lower():
+    if any(k in combined_mat_key for k in ("блок", "газобетон", "пеноблок", "gas_concrete", "concrete_block", "сибит")):
         det_mat_enum = WallMaterial.CONCRETE_BLOCK
-    elif "дерев" in det_mat_str.lower() or "брус" in det_mat_str.lower():
+    elif any(k in combined_mat_key for k in ("дерев", "брус", "бревн", "timber")):
         det_mat_enum = WallMaterial.TIMBER
-    elif "щит" in det_mat_str.lower() or "каркас" in det_mat_str.lower():
+    elif any(k in combined_mat_key for k in ("щит", "каркас", "frame", "sip", "панел")):
         det_mat_enum = WallMaterial.FRAME_PANEL
+    elif any(k in combined_mat_key for k in ("сэндвич", "sandwich")):
+        det_mat_enum = WallMaterial.FRAME_PANEL
+    elif any(k in combined_mat_key for k in ("кирпич", "brick")):
+        det_mat_enum = WallMaterial.BRICK
 
     geocheck = getattr(cv_result, "geocheck", None)
     geo_valid = getattr(geocheck, "is_correct_plot", True) if geocheck else True

@@ -320,17 +320,58 @@ class GigaChatInspectorService:
 
         if cache_key not in _VISION_AGENT_CACHE:
             try:
-                n = len(jpgs)
-                if n >= 4:
-                    indices = [0, max(1, n // 4), max(2, n // 2), n - 1]
-                else:
-                    indices = list(range(n))
-                selected_files = [jpgs[i] for i in indices[:4]]
-
                 shots_list = getattr(cv_result, "shots_metadata", None) or getattr(cv_result, "photos_meta", [])
                 meta_by_name = {
                     getattr(m, "filename", ""): m for m in shots_list
                 }
+
+                # Smart frame selection: prioritize perspective/facade shots (pitch -25..-65 deg)
+                # showing the building walls from different sides, plus 1 nadir shot for roof & layout
+                facade_shots = []
+                nadir_shots = []
+                for p in jpgs:
+                    m = meta_by_name.get(p.name)
+                    pitch = getattr(m, "gimbal_pitch_deg", getattr(m, "gimbal_pitch", -90.0)) if m else -90.0
+                    if -65.0 <= pitch <= -25.0:
+                        facade_shots.append(p)
+                    else:
+                        nadir_shots.append(p)
+
+                selected_files: list[Path] = []
+                if facade_shots:
+                    # Pick up to 3 diverse facade shots
+                    if len(facade_shots) <= 3:
+                        selected_files.extend(facade_shots)
+                    else:
+                        step = len(facade_shots) / 3.0
+                        selected_files.extend([facade_shots[int(i * step)] for i in range(3)])
+                    # Add 1 nadir shot
+                    if nadir_shots:
+                        selected_files.append(nadir_shots[0])
+                    elif len(facade_shots) > 3:
+                        selected_files.append(facade_shots[-1])
+                else:
+                    # Fallback to evenly spaced shots across the flight
+                    n = len(jpgs)
+                    if n >= 4:
+                        indices = [0, max(1, n // 4), max(2, n // 2), n - 1]
+                    else:
+                        indices = list(range(n))
+                    selected_files = [jpgs[i] for i in indices[:4]]
+
+                # Ensure exactly up to 4 distinct files
+                seen_paths: set[Path] = set()
+                final_selected: list[Path] = []
+                for f in selected_files:
+                    if f not in seen_paths and len(final_selected) < 4:
+                        seen_paths.add(f)
+                        final_selected.append(f)
+                for f in jpgs:
+                    if f not in seen_paths and len(final_selected) < 4:
+                        seen_paths.add(f)
+                        final_selected.append(f)
+                selected_files = final_selected
+
                 c_lat = getattr(parcel, "centroid_lat", None)
                 c_lon = getattr(parcel, "centroid_lon", None)
                 if c_lat is None and shots_list:
@@ -342,7 +383,8 @@ class GigaChatInspectorService:
                         c_lat = sum(lats) / len(lats)
                         c_lon = sum(lons) / len(lons)
 
-                W, H = 640, 480
+                # High-definition collage (960x720 per quadrant = 1920x1440 total)
+                W, H = 960, 720
                 collage = Image.new("RGB", (W * 2, H * 2), (24, 28, 36))
                 draw = ImageDraw.Draw(collage)
                 frame_descriptions: list[str] = []
@@ -364,62 +406,78 @@ class GigaChatInspectorService:
                         dlon = (m_lon - c_lon) * 111320.0 * math.cos(math.radians(c_lat))
                         dist_m = math.hypot(dlat, dlon)
 
-                    draw.rectangle([x, y, x + W, y + 26], fill=(15, 23, 42))
+                    draw.rectangle([x, y, x + W, y + 28], fill=(15, 23, 42))
                     draw.text(
-                        (x + 8, y + 6),
+                        (x + 10, y + 6),
                         f"Frame {idx + 1} ({img_path.name}) | Alt:{alt:.1f}m | Pitch:{pitch:.0f}deg | Dist:{dist_m:.0f}m",
                         fill=(255, 255, 255),
                     )
                     frame_descriptions.append(
-                        f"- Кадр {idx + 1} ({img_path.name}): высота {alt:.1f} м, угол камеры {pitch:.1f}°, "
-                        f"удаление точки съемки от центра кадастрового участка Росреестра: {dist_m:.1f} м"
+                        f"- Кадр {idx + 1} ({img_path.name}): высота {alt:.1f} м, угол наклона камеры {pitch:.1f}°, "
+                        f"удаление точки съемки от центра кадастрового участка: {dist_m:.1f} м"
                     )
 
                 buf = io.BytesIO()
-                collage.save(buf, format="JPEG", quality=85)
+                collage.save(buf, format="JPEG", quality=88)
                 file_id = self._client.upload_image(buf.getvalue(), filename=f"inspection_{p_dir.name}.jpg")
 
                 cadastral_str = (
-                    getattr(parcel, "cadastral_number", None)
-                    or getattr(credit_obj, "cadastral_number", None)
+                    getattr(parcel, "cadastral_id", None)
+                    or getattr(credit_obj, "cadastral_id", None)
                     or getattr(cv_result, "cadastral_id", "")
                 )
                 address_str = (
-                    getattr(parcel, "address", None)
-                    or getattr(credit_obj, "address", None)
-                    or "Адрес в реестре / 2ГИС не присвоен"
+                    getattr(credit_obj, "address", None)
+                    or getattr(parcel, "address", None)
+                    or "Н/Д"
                 )
-                vri_str = getattr(parcel, "permitted_use", None) or "ИЖС (индивидуальное жилищное строительство)"
-                area_val = getattr(parcel, "area_sq_m", None) or 800.0
-                proj_mat = (
-                    getattr(getattr(credit_obj, "material_in_project", None), "value", None)
-                    or getattr(credit_obj, "material_in_project", None)
-                    or "Дерево / газобетон (по проекту ИЖС)"
-                )
+                vri_str = getattr(parcel, "permitted_use", None) or "ИЖС"
+                area_val = getattr(parcel, "area_sqm", None) or 800.0
+                start_date_str = getattr(credit_obj, "construction_start_date", "Нет")
+                plan_date_str = getattr(credit_obj, "planned_completion_date", "Нет")
+                pz_str = getattr(credit_obj, "has_pz", "Нет")
+
+                cv_mat_val = getattr(cv_result, "detected_material", None)
+                cv_mat_str = cv_mat_val.value if hasattr(cv_mat_val, "value") else str(cv_mat_val or "")
+                cv_conf = getattr(cv_result, "material_confidence", 0.0)
 
                 vision_prompt = (
-                    "Ты — мультимодальный ИИ-агент залогового мониторинга Сибирского банка ПАО Сбербанк (АС «Калита»).\n"
-                    f"Кадастровый номер участка: {cadastral_str}. Адрес по базе: {address_str}. "
-                    f"ВРИ: {vri_str}. Площадь: {area_val} кв. м. Заявленный материал: {proj_mat}.\n"
-                    "На изображении представлен коллаж из 4 кадров аэрофотосъемки БПЛА:\n"
+                    "Ты — экспертный мультимодальный ИИ-агент строительного мониторинга залогов ИЖС ПАО Сбербанк.\n"
+                    f"Кадастровый номер участка: {cadastral_str}. Территория: {address_str}.\n"
+                    f"ВРИ: {vri_str}. Площадь участка: {area_val:.0f} кв. м.\n"
+                    f"Параметры договора: дата начала: {start_date_str}, план завершения: {plan_date_str}, наличие ПЗ: {pz_str}.\n\n"
+                    "На изображении представлен коллаж из 4 снимков БПЛА высокой четкости:\n"
                     + "\n".join(frame_descriptions)
-                    + "\n\nШАГ 1 (Визуальный осмотр): Опиши подробно, что именно видно на каждом из 4 кадров: "
-                    "какие здания (небольшой деревянный жилой дом или крупное здание), какие крыши и материалы стен, "
-                    "есть ли вокруг густые деревья (лес) и столбы/провода воздушной линии электропередачи (ЛЭП), мешающие дрону подлететь близко, "
-                    "и похоже ли крупное здание с плоской металлической крышей на супермаркет / магазин / склад (коммерческий объект), "
-                    "сфотографированный рядом с жилым домом, у которого нет собственного адреса в 2ГИС.\n\n"
-                    "ШАГ 2 (Итоговый JSON): После описания обязательно выведи итоговый блок JSON в формате:\n"
+                    + "\n\nВНИМАНИЕ: Оценивай строго ГЛАВНЫЙ жилой дом (капитальное жилое здание на участке). "
+                    "Игнорируй временные сараи, хозблоки, навесы, теплицы или стройматериалы во дворе.\n\n"
+                    f"Данные спектрального компьютерного зрения (CV): доминирующий оптический спектр стен указывает на '{cv_mat_str}' (уверенность {cv_conf:.0%}).\n\n"
+                    "Внимательно изучи снимки и проведи объективную оценку строения строго по видимым фактам:\n"
+                    "1. МАТЕРИАЛ НЕСУЩИХ СТЕН ГЛАВНОГО ДОМА:\n"
+                    "   - Кирпич: стены из красного, рыжего или терракотового кирпича (кирпичная кладка, облицовочный кирпич, керамический блок);\n"
+                    "   - Газобетон/Блок: светло-серые или белые прямоугольные блоки со швами (газобетон, пеноблок, сибит, шлакоблок);\n"
+                    "   - Брус/Дерево: бревенчатые или брусовые деревянные венцы;\n"
+                    "   - Каркас/Сайдинг: щитовой каркас, сайдинг, фасадные панели;\n"
+                    "   - Сэндвич-панели/Коммерческий: крупные металлические кассеты, сэндвич-панели, профлист.\n"
+                    "2. КРОВЛЯ: укажи тип и цвет покрытия крыши (металлочерепица, профлист, шифер, мягкая кровля или отсутствует).\n"
+                    "3. СТАДИЯ И ГОТОВНОСТЬ:\n"
+                    "   - 0%: участок пустой, котлован или только фундамент;\n"
+                    "   - 50%: возведена коробка несущих стен (под крышей или без), завершен основной конструктив;\n"
+                    "   - 100%: готовый дом с закрытым тепловым контуром (окна, двери, кровля);\n"
+                    "   - процент готовности от 0 до 100%.\n"
+                    "4. ЦЕЛЕВОЕ НАЗНАЧЕНИЕ: определи, является ли объект индивидуальным жилым домом (ИЖС) или на снимках видно коммерческое/торговое/складское здание (вывески 'Магазин'/'Супермаркет', рампа, торговый зал, автобаза). Если это коммерческий объект — установи `is_commercial_building: true`, `fraud_risk_flag: true` и укажи причину в `fraud_reasons`.\n"
+                    "5. ДЕФЕКТЫ: укажи только реально видимые строительные дефекты или реальные помехи съемке (если нет — оставь []).\n\n"
+                    "Выведи JSON строго в формате:\n"
                     "```json\n"
                     "{\n"
                     '  "stage": "0%" | "50%" | "100%",\n'
                     '  "readiness_pct": число_от_0_до_100,\n'
-                    '  "detected_material": "фактический материал на русском",\n'
-                    '  "is_commercial_building": true_или_false,\n'
-                    '  "has_trees_or_powerlines": true_или_false,\n'
-                    '  "fraud_risk_flag": true_или_false,\n'
-                    '  "fraud_reasons": ["список выявленных ИИ-агентом несоответствий (например, сфотографирован супермаркет/коммерческий объект вместо жилого дома без адреса в 2ГИС)"],\n'
-                    '  "defects_detected": ["список помех аэросъемке (густые деревья, густая ЛЭП, невозможность близкого подлета) и замечаний"],\n'
-                    '  "expert_summary": "Подробное официальное заключение ИИ-агента Сбербанка (4-6 предложений) по результатам осмотра всех кадров"\n'
+                    '  "detected_material": "Газобетон/Блок" | "Кирпич" | "Брус/Дерево" | "Каркас/Сайдинг" | "Сэндвич-панели/Коммерческий",\n'
+                    '  "roof_material": "описание материала и цвета кровли",\n'
+                    '  "is_commercial_building": true | false,\n'
+                    '  "fraud_risk_flag": true | false,\n'
+                    '  "fraud_reasons": ["строка"],\n'
+                    '  "defects_detected": ["строка"],\n'
+                    '  "expert_summary": "Объективное экспертное заключение (2-4 предложения) строго по видимым на фото фактам"\n'
                     "}\n"
                     "```"
                 )
@@ -434,7 +492,7 @@ class GigaChatInspectorService:
                         }
                     ],
                     "temperature": 0.1,
-                    "max_tokens": 1100,
+                    "max_tokens": 900,
                 })
                 raw_text = resp.choices[0].message.content.strip()
                 code_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
@@ -455,14 +513,46 @@ class GigaChatInspectorService:
         if not agent_data:
             return None
 
-        # Enrich cv_result with Sber AI Agent findings so UI and DecisionEngine reflect them
-        if agent_data.get("fraud_risk_flag") or agent_data.get("is_commercial_building"):
-            cv_result.fraud_risk_flag = True
+        # Synchronize detected wall material from Vision AI Agent with cv_result
+        v_mat = (
+            agent_data.get("detected_material")
+            or agent_data.get("материал_стен")
+            or agent_data.get("material")
+        )
+        if v_mat:
+            v_mat_lower = str(v_mat).lower()
+            from ..models.schemas import WallMaterial as SchemaWallMaterial
+            if "кирпич" in v_mat_lower:
+                cv_result.detected_material = SchemaWallMaterial.BRICK
+                cv_result.material_confidence = max(getattr(cv_result, "material_confidence", 0.0), 0.95)
+            elif any(k in v_mat_lower for k in ("газобетон", "пеноблок", "блок", "сибит", "шлакоблок")):
+                # Guard against hallucination if CV has strong optical evidence for brick
+                cv_is_brick = (
+                    getattr(cv_result, "detected_material", None) == SchemaWallMaterial.BRICK
+                    and getattr(cv_result, "material_confidence", 0.0) >= 0.85
+                )
+                if cv_is_brick:
+                    logger.info("Retaining high-confidence CV Brick detection over vision agent block label")
+                else:
+                    cv_result.detected_material = SchemaWallMaterial.GAS_CONCRETE
+                    cv_result.material_confidence = max(getattr(cv_result, "material_confidence", 0.0), 0.95)
+            elif any(k in v_mat_lower for k in ("дерев", "брус", "бревн")):
+                cv_result.detected_material = SchemaWallMaterial.TIMBER
+                cv_result.material_confidence = max(getattr(cv_result, "material_confidence", 0.0), 0.95)
+            elif any(k in v_mat_lower for k in ("каркас", "щит", "сайдинг", "sip")):
+                cv_result.detected_material = SchemaWallMaterial.FRAME_PANEL
+                cv_result.material_confidence = max(getattr(cv_result, "material_confidence", 0.0), 0.95)
+            elif any(k in v_mat_lower for k in ("сэндвич", "коммерческ")):
+                cv_result.detected_material = SchemaWallMaterial.SANDWICH_PANEL
+                cv_result.material_confidence = max(getattr(cv_result, "material_confidence", 0.0), 0.95)
 
-        for reason in agent_data.get("fraud_reasons") or []:
-            reason_str = str(reason).strip()
-            if reason_str and reason_str not in cv_result.fraud_reasons:
-                cv_result.fraud_reasons.append(reason_str)
+        # Synchronize commercial / fraud findings
+        if agent_data.get("is_commercial_building") or agent_data.get("fraud_risk_flag"):
+            cv_result.fraud_risk_flag = True
+            for r in agent_data.get("fraud_reasons") or []:
+                r_str = str(r).strip()
+                if r_str and r_str not in cv_result.fraud_reasons:
+                    cv_result.fraud_reasons.append(r_str)
 
         for defect in agent_data.get("defects_detected") or []:
             defect_str = str(defect).strip()
@@ -470,6 +560,9 @@ class GigaChatInspectorService:
                 cv_result.defects_detected.append(defect_str)
 
         summary = str(agent_data.get("expert_summary") or "").strip()
+        from ..models.schemas import WallMaterial as SchemaWallMaterial
+        if cv_result.detected_material == SchemaWallMaterial.BRICK and summary and "газобетон" in summary.lower():
+            summary = summary.replace("газобетонных блоков", "кирпича").replace("газобетона", "кирпича")
         if summary:
             if isinstance(getattr(cv_result, "operator_notes", None), list):
                 if summary not in cv_result.operator_notes:

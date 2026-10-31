@@ -20,6 +20,16 @@ from .config import find_dataset_root
 from .ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
 
 
+def is_cadastral_digits(name: str) -> bool:
+    """Return True only if `name` looks like a Russian cadastral number (not a DJI YYYYMMDD timestamp)."""
+    if not name or "DJI" in name.upper():
+        return False
+    digits = re.sub(r"[^\d]", "", name)
+    if digits.startswith(("2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029")):
+        return False
+    return 10 <= len(digits) <= 16
+
+
 def sanitize_plot_id(name: str) -> str:
     """Sanitize and normalize a raw folder name, filename, or cadastral ID into a safe identifier.
 
@@ -31,7 +41,7 @@ def sanitize_plot_id(name: str) -> str:
     """
     clean_base = Path(name).stem if "." in name else name
     digits_only = re.sub(r"[^\d]", "", clean_base)
-    if len(digits_only) >= 10:
+    if is_cadastral_digits(clean_base):
         return digits_only
 
     # Fallback to sanitized alphanumeric if not standard Russian cadastral digits
@@ -241,13 +251,13 @@ class ParcelManager:
                 if len(Path(m.filename).parts) > 1
             }
 
-            # Check if top-level directory names represent parcel IDs
+            # Check if top-level directory names represent parcel IDs (not DJI_2026... folders)
             cadastral_dirs = [
                 d for d in first_parts
-                if len(re.sub(r"[^\d]", "", d)) >= 10
+                if is_cadastral_digits(d)
             ]
 
-            if cadastral_dirs:
+            if cadastral_dirs and not target_plot_id:
                 # Structure A: ZIP contains top-level parcel folders
                 for member in members:
                     parts = Path(member.filename).parts
@@ -271,14 +281,14 @@ class ParcelManager:
                 second_level_dirs = set()
                 for m in members:
                     parts = Path(m.filename).parts
-                    if len(parts) >= 3 and len(re.sub(r"[^\d]", "", parts[1])) >= 10:
+                    if len(parts) >= 3 and is_cadastral_digits(parts[1]):
                         second_level_dirs.add(parts[1])
 
-                if second_level_dirs:
+                if second_level_dirs and not target_plot_id:
                     # Structure C: Wrapped inside a single parent folder
                     for member in members:
                         parts = Path(member.filename).parts
-                        if len(parts) >= 2 and len(re.sub(r"[^\d]", "", parts[1])) >= 10:
+                        if len(parts) >= 2 and is_cadastral_digits(parts[1]):
                             clean_id = sanitize_plot_id(parts[1])
                             extracted_plot_ids.add(clean_id)
                             sub_path = Path(*parts[2:])
@@ -288,7 +298,7 @@ class ParcelManager:
                             with zf.open(member) as src, open(dest_path, "wb") as dst:
                                 shutil.copyfileobj(src, dst)
                 else:
-                    # Structure B: Flat files directly inside zip
+                    # Structure B: Flat files or DJI flight subfolders inside zip
                     dest_id = target_plot_id
                     if not dest_id and hasattr(zip_source, "name") and zip_source.name:
                         dest_id = sanitize_plot_id(zip_source.name)
@@ -315,8 +325,8 @@ class ParcelManager:
             parcel = CadastralRegistry.get_parcel(pid, fetch_online=True, plot_dir=plot_dir)
             if (
                 parcel is not None
-                and len(re.sub(r"[^\d]", "", pid)) < 10
-                and len(re.sub(r"[^\d]", "", parcel.raw_folder_name)) >= 10
+                and not is_cadastral_digits(pid)
+                and is_cadastral_digits(parcel.raw_folder_name)
             ):
                 new_dir = root / parcel.raw_folder_name
                 if new_dir.exists() and new_dir != plot_dir:

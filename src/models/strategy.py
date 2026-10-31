@@ -5,8 +5,8 @@ and data required for generating the official Collateral Inspection Act (При�
 """
 
 from datetime import datetime, date, timezone
-from typing import List
-from pydantic import BaseModel, Field
+from typing import Any, List
+from pydantic import BaseModel, Field, model_validator
 
 from .enums import BankStrategy, RiskLevel, CollateralCondition
 from .credit import CreditObject
@@ -69,3 +69,16 @@ class ActReportData(BaseModel):
         default_factory=list,
         description="Фототаблица подтверждающих снимков"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_reloaded_models(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for k, v in list(out.items()):
+            if hasattr(v, "model_dump"):
+                out[k] = v.model_dump()
+            elif isinstance(v, list):
+                out[k] = [item.model_dump() if hasattr(item, "model_dump") else item for item in v]
+        return out

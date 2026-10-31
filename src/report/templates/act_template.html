@@ -200,6 +200,48 @@
     </div>
   </div>
 
+  {% if data.credit.is_minimal_schema %}
+  <!-- РАЗДЕЛ 1: СВЕДЕНИЯ ИЗ РЕЕСТРА -->
+  <div class="section-title">1. Сведения об объекте из реестра мониторинга</div>
+  <table class="data-table">
+    <tr>
+      <th>Территория</th>
+      <td class="val">{{ data.credit.address }}</td>
+    </tr>
+    <tr>
+      <th>Кадастровый номер</th>
+      <td class="val"><strong>{{ data.credit.cadastral_number }}</strong></td>
+    </tr>
+    <tr>
+      <th>Дата начала строительства</th>
+      <td class="val">{{ data.credit.construction_start_date }}</td>
+    </tr>
+    <tr>
+      <th>Плановая дата</th>
+      <td class="val"><strong>{{ data.credit.planned_completion_date_str }}</strong></td>
+    </tr>
+    <tr>
+      <th>Фактическая дата</th>
+      <td class="val">{{ data.credit.actual_completion_date_str }}</td>
+    </tr>
+    <tr>
+      <th>Наличие ПЗ</th>
+      <td class="val">{{ data.credit.has_pz }}</td>
+    </tr>
+    <tr>
+      <th>ОН зарегистрирован</th>
+      <td class="val">{{ data.credit.is_registered }}</td>
+    </tr>
+    <tr>
+      <th>Залог</th>
+      <td class="val">{{ data.credit.is_pledged }}</td>
+    </tr>
+    <tr>
+      <th>Наличие фото с неба</th>
+      <td class="val">{{ data.credit.has_aerial_photo }}</td>
+    </tr>
+  </table>
+  {% else %}
   <!-- РАЗДЕЛ 1: КРЕДИТ И ЗАЕМЩИК -->
   <div class="section-title">1. Реквизиты кредитного договора и стороны</div>
   <table class="data-table">
@@ -261,26 +303,17 @@
       <td class="val">{{ data.credit.planned_area_sqm }} кв. м / {{ data.credit.projected_floors }} эт.</td>
     </tr>
   </table>
+  {% endif %}
 
-  <!-- РАЗДЕЛ 3: НАБЛЮДЕНИЯ БПЛА И ГОТОВНОСТЬ -->
-  <div class="section-title">3. Результаты аэрофотосъемки БПЛА и компьютерного зрения (CV)</div>
+  <!-- РАЗДЕЛ 2/3: НАБЛЮДЕНИЯ БПЛА И ГОТОВНОСТЬ -->
+  <div class="section-title">{{ "2" if data.credit.is_minimal_schema else "3" }}. Результаты аэрофотосъемки БПЛА и компьютерного зрения (CV)</div>
   <table class="data-table">
     <tr>
-      <th>Дата облета БПЛА / Обработано кадров</th>
-      <td class="val">{{ data.inspection.inspection_date.strftime('%d.%m.%Y') }} / {{ data.inspection.total_images_analyzed }} снимков</td>
+      <th>Обработано кадров БПЛА</th>
+      <td class="val">{{ data.inspection.total_images_analyzed }} снимков</td>
     </tr>
     <tr>
-      <th>Комплектность ракурсов (ТЗ: 4+2)</th>
-      <td class="val">
-        {% if data.inspection.view_angles_complete %}
-          <span class="badge badge-green">Полный комплект (4 фасада + 2 надира)</span>
-        {% else %}
-          <span class="badge badge-amber">Неполный комплект ракурсов</span>
-        {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th>Геопривязка к кадастру (&lt; 50 м)</th>
+      <th>Геопривязка к кадастру</th>
       <td class="val">
         {% if data.inspection.geo_match %}
           <span class="badge badge-green">Подтверждена (RTK позиционирование)</span>
@@ -306,23 +339,15 @@
       </td>
     </tr>
     <tr>
-      <th>Фактический материал стен (CV)</th>
+      <th>Определенный материал конструкции (CV)</th>
       <td class="val">
         <strong>{{ data.inspection.detected_wall_material.value }}</strong>
-        {% if data.inspection.material_match %}
-          <span class="badge badge-green" style="margin-left: 6px;">Соответствует проекту</span>
-        {% else %}
-          <span class="badge badge-red" style="margin-left: 6px;">Не соответствует смете!</span>
-        {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th>Градостроительный отступ 3 м (ст. 222 ГК РФ)</th>
-      <td class="val">
-        {% if data.inspection.boundary_violation %}
-          <span class="badge badge-red">Нарушен: менее 3.0 м (риск признания самостроем)</span>
-        {% else %}
-          <span class="badge badge-green">Соблюден ({{ data.inspection.distance_to_boundary_m or '>= 3.0' }} м)</span>
+        {% if not data.credit.is_minimal_schema %}
+          {% if data.inspection.material_match %}
+            <span class="badge badge-green" style="margin-left: 6px;">Соответствует проекту</span>
+          {% else %}
+            <span class="badge badge-red" style="margin-left: 6px;">Не соответствует смете!</span>
+          {% endif %}
         {% endif %}
       </td>
     </tr>

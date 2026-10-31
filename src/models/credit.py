@@ -40,6 +40,14 @@ class CreditObject(BaseModel):
     address: str = Field(default="Новосибирская область", description="Адрес или описание местоположения")
     centroid_lat: Optional[float] = Field(default=None, description="Широта центра участка WGS84")
     centroid_lon: Optional[float] = Field(default=None, description="Долгота центра участка WGS84")
+    construction_start_date: str = Field(default="Нет", description="Дата начала строительства")
+    planned_completion_date_str: str = Field(default="Нет", description="Плановая дата")
+    actual_completion_date_str: str = Field(default="Нет", description="Фактическая дата")
+    has_pz: str = Field(default="Нет", description="Наличие ПЗ")
+    is_registered: str = Field(default="Нет", description="ОН зарегистрирован")
+    is_pledged: str = Field(default="Нет", description="Залог")
+    has_aerial_photo: str = Field(default="Да", description="Наличие фото с неба")
+    is_minimal_schema: bool = Field(default=False, description="Строгий формат реестра заказчика без додуманных полей")
 
     @property
     def clean_cadastral(self) -> str:

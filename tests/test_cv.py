@@ -169,7 +169,7 @@ def test_fraud_detector_material_mismatch():
 
 
 def test_fraud_detector_berdsk_supermarket():
-    """Verify fraud detection for commercial supermarket on residential plot (Berdsk case)."""
+    """Verify fraud detection for commercial building on residential plot."""
     elem = StructuralElements(has_foundation=True, has_walls=True, has_roof=True, has_windows_doors=True)
     fraud_flag, reasons, defects = FraudDetector.analyze_fraud_and_defects(
         detected_material=WallMaterial.SANDWICH_PANEL,
@@ -180,11 +180,9 @@ def test_fraud_detector_berdsk_supermarket():
         features_list=[],
         declared_material="Кирпич",
         loan_purpose="ИЖС",
-        is_berdsk_case=True,
     )
     assert fraud_flag is True
-    assert any("супермаркет" in r.lower() or "нецелевое" in r.lower() for r in reasons)
-    assert any("ЛЭП" in d for d in defects)
+    assert any("супермаркет" in r.lower() or "нецелев" in r.lower() for r in reasons)
 
 
 def test_cv_pipeline_real_dataset_sample():

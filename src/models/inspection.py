@@ -5,8 +5,8 @@ elements, defects, and overall readiness calculations.
 """
 
 from datetime import datetime, date
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, List, Optional
+from pydantic import BaseModel, Field, model_validator
 
 from .enums import StageCategory, WallMaterial, CameraViewType
 
@@ -111,3 +111,16 @@ class InspectionResult(BaseModel):
         default=False,
         description="Признаки заброшенности стройки без консервации (>6 мес. без динамики)"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_reloaded_models(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for k, v in list(out.items()):
+            if hasattr(v, "model_dump"):
+                out[k] = v.model_dump()
+            elif isinstance(v, list):
+                out[k] = [item.model_dump() if hasattr(item, "model_dump") else item for item in v]
+        return out

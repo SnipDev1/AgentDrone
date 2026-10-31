@@ -344,7 +344,13 @@ class CadastralRegistry:
 
         # Check if these flight coordinates match an existing Rosreestr parcel within 200m
         matched = cls.match_parcel_by_coordinates(c_lat, c_lon, max_dist_m=200.0)
-        if matched is not None and len(re.sub(r"[^\d]", "", identifier)) < 10:
+        id_digits = re.sub(r"[^\d]", "", identifier)
+        is_valid_cad = (
+            "DJI" not in identifier.upper()
+            and not id_digits.startswith(("2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029"))
+            and 10 <= len(id_digits) <= 16
+        )
+        if matched is not None and not is_valid_cad:
             return matched
 
         norm_id = normalize_cadastral_id(identifier)
@@ -420,7 +426,8 @@ class CadastralRegistry:
         best_parcel: CadastralParcel | None = None
         best_dist = max_dist_m
         for p in cls._CACHE.values():
-            if len(re.sub(r"[^\d]", "", p.cadastral_id)) < 10:
+            p_digits = re.sub(r"[^\d]", "", p.cadastral_id)
+            if len(p_digits) < 10 or p_digits.startswith("202"):
                 continue
             d_lat = (lat - p.centroid_lat) * 111139.0
             d_lon = (lon - p.centroid_lon) * 111139.0 * math.cos(math.radians(lat))

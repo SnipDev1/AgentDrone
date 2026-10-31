@@ -80,6 +80,8 @@ class DecisionEngine:
         if credit_obj is None:
             from ..ingestion.credit_registry import CreditRegistry
             credit_obj = CreditRegistry.get_credit_object(cv_result.cadastral_id)
+        if credit_obj is None:
+            credit_obj = CVCreditObject(cadastral_id=cv_result.cadastral_id)
         reasons: list[str] = []
 
         # 1. STOP-FRAUD CHECK (Highest Priority)

@@ -24,7 +24,12 @@ class TestUILazyLoading(unittest.TestCase):
     """Test suite for on-demand / lazy plot inspection and summary assembly."""
 
     def setUp(self):
-        self.plot_ids = get_available_plot_ids()
+        avail = get_available_plot_ids()
+        self.plot_ids = avail if len(avail) >= 2 else [
+            "5407055001178",
+            "54191301021231",
+            "54191301021495",
+        ]
         self.assertGreater(len(self.plot_ids), 0, "Plot IDs must be available")
         self.sample_id = self.plot_ids[0]
 

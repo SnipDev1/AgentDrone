@@ -7,8 +7,9 @@ computer vision findings, and banking credit objects.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ShotAngleType(str, Enum):
@@ -165,20 +166,41 @@ class CVInspectionResult(BaseModel):
     multispectral: MultispectralAnalysis | None = None
     operator_notes: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_reloaded_models(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for k, v in list(out.items()):
+            if hasattr(v, "model_dump"):
+                out[k] = v.model_dump()
+            elif isinstance(v, list):
+                out[k] = [item.model_dump() if hasattr(item, "model_dump") else item for item in v]
+        return out
+
 
 class CreditObject(BaseModel):
-    """Bank credit registry object record."""
+    """Bank credit registry object record (strictly matching customer CSV table)."""
     cadastral_id: str
-    borrower_name: str
-    credit_agreement_number: str
-    credit_amount_rub: float
-    planned_completion_date: str
-    declared_wall_material: str
+    address: str = "Новосибирская область"
+    planned_completion_date: str = "Нет"
+    actual_completion_date: str = "Нет"
+    has_pz: str = "Нет"
+    is_registered: str = "Нет"
+    is_pledged: str = "Нет"
+    construction_start_date: str = "Нет"
+    has_aerial_photo: str = "Да"
+    is_minimal_schema: bool = True
+    # Legacy optional fields retained with empty defaults for unit test compatibility only
+    borrower_name: str = ""
+    credit_agreement_number: str = ""
+    credit_amount_rub: float = 0.0
+    declared_wall_material: str = ""
     loan_purpose: str = "ИЖС"
     days_overdue: int = 0
     tranche_number: int = 1
     total_tranches: int = 3
-    address: str = "Новосибирская область"
 
 
 class StrategyType(str, Enum):

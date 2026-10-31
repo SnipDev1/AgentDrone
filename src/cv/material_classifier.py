@@ -54,10 +54,10 @@ class MaterialClassifier:
 
         # Compare residential materials
         res_scores = {
-            WallMaterial.BRICK: agg_shares["red_brick"] * 1.5,
-            WallMaterial.TIMBER: agg_shares["wood_timber"] * 1.4,
-            WallMaterial.GAS_CONCRETE: agg_shares["gray_block"] * 1.2,
-            WallMaterial.FRAME_PANEL: agg_shares["yellow_osb"] * 1.3,
+            WallMaterial.GAS_CONCRETE: agg_shares["gray_block"] * 1.35,
+            WallMaterial.BRICK: agg_shares["red_brick"] * 1.25,
+            WallMaterial.TIMBER: agg_shares["wood_timber"] * 1.30,
+            WallMaterial.FRAME_PANEL: agg_shares["yellow_osb"] * 1.30,
         }
 
         # Check if no building features exist

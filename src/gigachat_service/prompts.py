@@ -52,7 +52,7 @@ def extract_context_payload(
     if proj_mat and hasattr(proj_mat, "value"):
         proj_mat_val = proj_mat.value
     else:
-        proj_mat_val = str(getattr(credit, "declared_wall_material", "Кирпич"))
+        proj_mat_val = str(getattr(credit, "declared_wall_material", "") or "")
 
     # 2. Inspection details
     insp_date = str(getattr(inspection, "inspection_date", "2026-09-24"))
@@ -73,7 +73,10 @@ def extract_context_payload(
 
     mat_match = getattr(inspection, "material_match", None)
     if mat_match is None:
-        mat_match = proj_mat_val.lower() in det_mat_val.lower() or det_mat_val.lower() in proj_mat_val.lower()
+        if not proj_mat_val:
+            mat_match = True
+        else:
+            mat_match = proj_mat_val.lower() in det_mat_val.lower() or det_mat_val.lower() in proj_mat_val.lower()
 
     dist_boundary = getattr(inspection, "distance_to_boundary_m", None)
     bound_violation = getattr(inspection, "boundary_violation", False)

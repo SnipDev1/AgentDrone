@@ -4,6 +4,7 @@ Verifies loading, Pydantic validation, and cadastral mapping of the 13
 test credit objects for Siberian Bank.
 """
 
+from pathlib import Path
 import pytest
 from src.engine.registry import CreditRegistry, get_default_registry
 from src.dataset import DroneDataset
@@ -19,7 +20,7 @@ def test_registry_loads_all_13_objects():
 
 def test_registry_matches_dataset_plots():
     """Verify that every cadastral plot in dataset has a matching credit in the registry."""
-    ds = DroneDataset()
+    ds = DroneDataset(Path("dataset/24.09.20206"))
     if not ds.is_available():
         pytest.skip("Dataset root not found, skipping plot matching")
 

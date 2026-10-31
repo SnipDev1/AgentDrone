@@ -26,55 +26,28 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-DEFAULT_SEARCH_PATHS = [
-    PROJECT_ROOT / "dataset" / "24.09.20206",
-    PROJECT_ROOT / "dataset",
-    PROJECT_ROOT / "data" / "24.09.20206",
-    PROJECT_ROOT / "data",
-    PROJECT_ROOT / "24.09.20206",
-]
+DEFAULT_UPLOAD_DIR = PROJECT_ROOT / "dataset" / "uploaded"
 
 
 def find_dataset_root(custom_path: str | Path | None = None) -> Path:
     """Find and return the root directory of the drone dataset.
 
-    Resolution order:
-    1. custom_path argument if provided.
-    2. DATASET_DIR or DATA_DIR environment variable from .env or OS.
-    3. Standard candidate paths relative to project root.
-
-    If the resolved directory contains a single subfolder containing the cadastral
-    directories (such as dataset/24.09.20206), that subfolder is automatically resolved.
+    By default, points to `dataset/uploaded` which starts empty so the user
+    uploads their own cadastral plots via the web UI.
     """
-    candidates = []
-
     if custom_path:
         p = Path(custom_path)
-        candidates.append(p if p.is_absolute() else PROJECT_ROOT / p)
+        return p if p.is_absolute() else PROJECT_ROOT / p
 
     env_dir = os.getenv("DATASET_DIR") or os.getenv("DATA_DIR")
     if env_dir:
         p = Path(env_dir)
-        candidates.append(p if p.is_absolute() else PROJECT_ROOT / p)
+        target = p if p.is_absolute() else PROJECT_ROOT / p
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
-    candidates.extend(DEFAULT_SEARCH_PATHS)
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            # Check if this candidate directly has cadastral dirs (numeric folders)
-            subdirs = [d for d in candidate.iterdir() if d.is_dir() and not d.name.startswith('.')]
-            has_cadastral = any(d.name.isdigit() and len(d.name) >= 10 for d in subdirs)
-            if has_cadastral:
-                return candidate
-
-            # Check if candidate has a subfolder with date name (e.g. 24.09.20206) that has cadastral dirs
-            for sub in subdirs:
-                sub_children = [d for d in sub.iterdir() if d.is_dir() and not d.name.startswith('.')]
-                if any(d.name.isdigit() and len(d.name) >= 10 for d in sub_children):
-                    return sub
-
-    # If nothing matched, return the best candidate or default
-    return candidates[0] if candidates else PROJECT_ROOT / "dataset"
+    DEFAULT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_UPLOAD_DIR
 
 
 DATASET_ROOT = find_dataset_root()
