@@ -1,0 +1,30 @@
+# Data folders / large datasets
+24.09.20206/
+data/
+downloads/
+*.part
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
