@@ -29,6 +29,12 @@ from src.engine.decision_engine import DecisionEngine
 from src.ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
 from src.ingestion.credit_registry import CreditRegistry
 from src.models.schemas import CreditObject, CVInspectionResult, StrategyRecommendation
+from src.ui.sber_theme import (
+    SBER_LOGO_SVG,
+    get_sber_css,
+    render_kpi_card,
+    render_sber_header,
+)
 
 # Page configuration
 st.set_page_config(
@@ -38,141 +44,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom Styling (Sberbank Green Theme)
-st.markdown(
-    """
-    <style>
-    :root {
-        --sber-green: #21a038;
-        --sber-dark-green: #0f6c24;
-        --sber-light-green: #eaf8ec;
-        --sber-gray: #f4f6f8;
-        --text-dark: #1f2937;
-    }
-    .main-header {
-        background: linear-gradient(135deg, #0e3d19 0%, #176527 50%, #21a038 100%);
-        padding: 20px 24px;
-        border-radius: 12px;
-        color: white;
-        margin-bottom: 24px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-    }
-    .main-header h1 {
-        color: white !important;
-        margin: 0;
-        font-size: 26px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .main-header p {
-        color: #d1fae5 !important;
-        margin: 6px 0 0 0;
-        font-size: 14px;
-    }
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 16px;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.04);
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 24px;
-        font-weight: 700;
-        color: #111827;
-        margin: 4px 0;
-    }
-    .metric-label {
-        font-size: 12px;
-        text-transform: uppercase;
-        color: #6b7280;
-        letter-spacing: 0.5px;
-    }
-    .badge-green {
-        background-color: #dcfce7;
-        color: #15803d;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .badge-yellow {
-        background-color: #fef9c3;
-        color: #854d0e;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .badge-red {
-        background-color: #fee2e2;
-        color: #b91c1c;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        font-weight: 600;
-        font-size: 12px;
-        display: inline-block;
-    }
-    .decision-card-green {
-        border-left: 6px solid #22c55e;
-        background: #f0fdf4;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .decision-card-yellow {
-        border-left: 6px solid #eab308;
-        background: #fefce8;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .decision-card-red {
-        border-left: 6px solid #ef4444;
-        background: #fef2f2;
-        padding: 16px 20px;
-        border-radius: 8px;
-        margin: 12px 0;
-    }
-    .sber-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        margin-top: 10px;
-    }
-    .sber-table th {
-        background-color: #f3f4f6;
-        color: #374151;
-        font-weight: 600;
-        padding: 10px 12px;
-        text-align: left;
-        border-bottom: 2px solid #e5e7eb;
-    }
-    .sber-table td {
-        padding: 10px 12px;
-        border-bottom: 1px solid #e5e7eb;
-        color: #1f2937;
-    }
-    .sber-table tr:hover {
-        background-color: #f9fafb;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 6px 6px 0 0;
-        padding: 8px 18px;
-        font-weight: 600;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# Inject Sberbank Design System (Plasma / SB Sans / Corporate Styling)
+st.markdown(get_sber_css(), unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -235,18 +108,10 @@ def main():
     # Pre-calculate portfolio data
     portfolio_data = analyze_portfolio_summary(tuple(plot_ids))
 
-    # Header Banner
-    st.markdown(
-        """
-        <div class="main-header">
-            <h1>🛸 AgentDrone — Мониторинг залогов БПЛА</h1>
-            <p>Сибирский банк ПАО Сбербанк • Центр залогового мониторинга & АС «Калита» • ИИ-инспекция ИЖС</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Sberbank Top Navbar
+    st.markdown(render_sber_header(active_objects_count=len(portfolio_data)), unsafe_allow_html=True)
 
-    # Top KPI Metrics bar
+    # Top KPI Metrics bar (SberBank Online Widgets)
     col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
     total_portfolio_rub = sum(d["credit_amount"] for d in portfolio_data)
     avg_readiness = (sum(d["readiness_pct"] for d in portfolio_data) / len(portfolio_data)) if portfolio_data else 0
@@ -255,115 +120,121 @@ def main():
 
     with col_m1:
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Объектов на мониторинге</div>
-                <div class="metric-value">{len(portfolio_data)}</div>
-                <div style="font-size:12px; color:#15803d;">● Все проверены БПЛА</div>
-            </div>
-            """,
+            render_kpi_card(
+                title="Объектов на мониторинге",
+                value=str(len(portfolio_data)),
+                subtext="● Все проверены БПЛА DJI",
+                icon_type="drone",
+                is_success=True,
+            ),
             unsafe_allow_html=True,
         )
     with col_m2:
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Сумма кредитного портфеля</div>
-                <div class="metric-value">{total_portfolio_rub / 1_000_000:.1f} млн ₽</div>
-                <div style="font-size:12px; color:#6b7280;">Обеспечение: 100%</div>
-            </div>
-            """,
+            render_kpi_card(
+                title="Кредитный портфель",
+                value=f"{total_portfolio_rub / 1_000_000:.1f} млн ₽",
+                subtext="100% залоговое покрытие",
+                icon_type="money",
+            ),
             unsafe_allow_html=True,
         )
     with col_m3:
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Средняя готовность объектов</div>
-                <div class="metric-value">{avg_readiness:.1f}%</div>
-                <div style="font-size:12px; color:#2563eb;">По весам Банка</div>
-            </div>
-            """,
+            render_kpi_card(
+                title="Средняя готовность",
+                value=f"{avg_readiness:.1f}%",
+                subtext="Весовые коэфф. Банка",
+                icon_type="chart",
+            ),
             unsafe_allow_html=True,
         )
     with col_m4:
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Алерты Stop-Fraud</div>
-                <div class="metric-value" style="color: {'#b91c1c' if fraud_count > 0 else '#15803d'};">
-                    {fraud_count}
-                </div>
-                <div style="font-size:12px; color: {'#b91c1c' if fraud_count > 0 else '#15803d'};">
-                    {'⚠️ Требуется блокировка' if fraud_count > 0 else '● Фрод не обнаружен'}
-                </div>
-            </div>
-            """,
+            render_kpi_card(
+                title="Алерты Stop-Fraud",
+                value=str(fraud_count),
+                subtext="⚠️ Требуется блокировка" if fraud_count > 0 else "● Рисков фрода нет",
+                icon_type="shield_alert",
+                is_alert=fraud_count > 0,
+                is_success=fraud_count == 0,
+            ),
             unsafe_allow_html=True,
         )
     with col_m5:
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-label">Авто-выдача траншей</div>
-                <div class="metric-value" style="color: #15803d;">{auto_approved}</div>
-                <div style="font-size:12px; color:#15803d;">Без ручного выезда</div>
-            </div>
-            """,
+            render_kpi_card(
+                title="Авто-выдача траншей",
+                value=str(auto_approved),
+                subtext="Прямой акцепт без выезда",
+                icon_type="check_circle",
+                is_success=True,
+            ),
             unsafe_allow_html=True,
         )
 
     st.write("")
 
     # Sidebar: Object Selector and Filters
-    st.sidebar.image(
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Sberbank_Logo_2020.svg/320px-Sberbank_Logo_2020.svg.png",
-        width=160,
-    )
-    st.sidebar.title("Навигация")
+    with st.sidebar:
+        st.markdown(
+            f"""
+            <div style="padding: 10px 0 16px 0; border-bottom: 1px solid #E5E8ED; margin-bottom: 16px;">
+                {SBER_LOGO_SVG}
+                <div style="font-size: 13px; color: #687182; margin-top: 6px; font-weight: 500;">
+                    Залоговый мониторинг БПЛА
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("### Навигация по залогам")
 
-    filter_risk = st.sidebar.selectbox(
-        "Фильтр по статусу риска:",
-        ["Все объекты (13)", "Только с рисками / Stop-Fraud", "Без рисков (ОК)"],
-    )
+        filter_risk = st.selectbox(
+            "Фильтр по статусу риска:",
+            ["Все объекты (13)", "Только с рисками / Stop-Fraud", "Без рисков (ОК)"],
+        )
 
-    filtered_plots = []
-    for item in portfolio_data:
-        if filter_risk == "Только с рисками / Stop-Fraud" and item["risk_level"] != "CRITICAL":
-            continue
-        if filter_risk == "Без рисков (ОК)" and item["risk_level"] != "LOW":
-            continue
-        filtered_plots.append(item["raw_id"])
+        filtered_plots = []
+        for item in portfolio_data:
+            if filter_risk == "Только с рисками / Stop-Fraud" and item["risk_level"] != "CRITICAL":
+                continue
+            if filter_risk == "Без рисков (ОК)" and item["risk_level"] != "LOW":
+                continue
+            filtered_plots.append(item["raw_id"])
 
-    if not filtered_plots:
-        filtered_plots = plot_ids
+        if not filtered_plots:
+            filtered_plots = plot_ids
 
-    def make_plot_label(raw_id: str) -> str:
-        row = next((r for r in portfolio_data if r["raw_id"] == raw_id), None)
-        norm_id = normalize_cadastral_id(raw_id)
-        if row:
-            risk_icon = "🔴" if row["risk_level"] == "CRITICAL" else ("🟡" if row["risk_level"] == "MEDIUM" else "🟢")
-            return f"{risk_icon} {norm_id} ({row['borrower'].split()[0]}, {row['readiness_pct']:.0f}%)"
-        return norm_id
+        def make_plot_label(raw_id: str) -> str:
+            row = next((r for r in portfolio_data if r["raw_id"] == raw_id), None)
+            norm_id = normalize_cadastral_id(raw_id)
+            if row:
+                risk_icon = "🔴" if row["risk_level"] == "CRITICAL" else ("🟡" if row["risk_level"] == "MEDIUM" else "🟢")
+                return f"{risk_icon} {norm_id} ({row['borrower'].split()[0]}, {row['readiness_pct']:.0f}%)"
+            return norm_id
 
-    selected_raw_id = st.sidebar.selectbox(
-        "Выберите кадастровый участок:",
-        filtered_plots,
-        format_func=make_plot_label,
-        index=0,
-    )
+        selected_raw_id = st.selectbox(
+            "Выберите кадастровый участок:",
+            filtered_plots,
+            format_func=make_plot_label,
+            index=0,
+        )
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📡 Телеметрия и Сервисы")
-    st.sidebar.markdown(
-        """
-        - **БПЛА:** DJI Mavic 3 Enterprise / M3M
-        - **Позиционирование:** RTK / PPK (Q=16 сантиметровый)
-        - **Кадастр:** Росреестр НСО (Центроиды, ВРИ)
-        - **Интеграция:** АС «Калита» (Шлюз активен)
-        - **AI Ядро:** OpenCV + Heuristic Risk Matrix
-        """
-    )
+        st.markdown("---")
+        st.markdown("#### 📡 Сервисы и Оборудование")
+        st.markdown(
+            """
+            <div style="font-size:13px; line-height:1.6; color:#4B5563; background:#F8FAFC; padding:12px; border-radius:12px; border:1px solid #E2E8F0;">
+                <div>🛸 <b>БПЛА:</b> DJI Mavic 3 Enterprise / M3M</div>
+                <div>🛰️ <b>RTK/PPK:</b> Сантиметровый фикс (Q=16)</div>
+                <div>🗺️ <b>Росреестр:</b> Центроиды и ВРИ НСО</div>
+                <div>⚡ <b>АС «Калита»:</b> Авто-акцепт траншей</div>
+                <div>🧠 <b>AI:</b> Computer Vision + Sber Rules</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # Main Tabs
     tab1, tab2, tab3, tab4 = st.tabs([
@@ -392,61 +263,62 @@ def main():
         with c_badge:
             if decision.risk_level == "CRITICAL":
                 st.markdown(
-                    "<div style='text-align:right;'><span class='badge-red'>КРИТИЧЕСКИЙ РИСК / СБ</span></div>",
+                    "<div style='text-align:right;'><span class='sber-badge-red'>⚠️ КРИТИЧЕСКИЙ РИСК / СБ</span></div>",
                     unsafe_allow_html=True,
                 )
             elif decision.risk_level == "MEDIUM":
                 st.markdown(
-                    "<div style='text-align:right;'><span class='badge-yellow'>ТРЕБУЕТ ВНИМАНИЯ</span></div>",
+                    "<div style='text-align:right;'><span class='sber-badge-yellow'>🟡 ТРЕБУЕТ ВНИМАНИЯ</span></div>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.markdown(
-                    "<div style='text-align:right;'><span class='badge-green'>БЕЗ РИСКА / СОГЛАСОВАНО</span></div>",
+                    "<div style='text-align:right;'><span class='sber-badge-green'>🟢 БЕЗ РИСКА / СОГЛАСОВАНО</span></div>",
                     unsafe_allow_html=True,
                 )
 
         st.write("")
 
-        # 4 Inspection Metric Cards
+        # 4 Inspection Metric Cards (Sber Online Style)
         col_i1, col_i2, col_i3, col_i4 = st.columns(4)
         with col_i1:
             st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Готовность объекта</div>
-                    <div class="metric-value">{cv_result.readiness_pct:.1f}%</div>
-                    <div style="font-size:12px; color:#15803d; font-weight:600;">{cv_result.stage_title}</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Готовность объекта",
+                    value=f"{cv_result.readiness_pct:.1f}%",
+                    subtext=cv_result.stage_title,
+                    icon_type="chart",
+                    is_success=cv_result.readiness_pct >= 50,
+                ),
                 unsafe_allow_html=True,
             )
             st.progress(min(max(cv_result.readiness_pct / 100.0, 0.0), 1.0))
         with col_i2:
             geo_status = "ПОДТВЕРЖДЕНО" if cv_result.geocheck.is_correct_plot else "НАРУШЕНИЕ"
-            geo_color = "#15803d" if cv_result.geocheck.is_correct_plot else "#b91c1c"
             st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Геовалидация (RTK)</div>
-                    <div class="metric-value" style="color: {geo_color};">{geo_status}</div>
-                    <div style="font-size:12px; color:#6b7280;">Смещение: {cv_result.geocheck.distance_to_cadastre_m:.1f} м (допуск 75м)</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Геовалидация (RTK)",
+                    value=geo_status,
+                    subtext=f"Смещение: {cv_result.geocheck.distance_to_cadastre_m:.1f} м (допуск 75м)",
+                    icon_type="drone",
+                    is_success=cv_result.geocheck.is_correct_plot,
+                    is_alert=not cv_result.geocheck.is_correct_plot,
+                ),
                 unsafe_allow_html=True,
             )
         with col_i3:
             mat_name = cv_result.detected_material.value
             declared_mat = credit_obj.declared_wall_material
-            mat_color = "#15803d" if mat_name in declared_mat or "жилой" in declared_mat.lower() else "#b91c1c"
+            mat_ok = mat_name in declared_mat or "жилой" in declared_mat.lower()
             st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Материал стен (CV)</div>
-                    <div class="metric-value" style="font-size:18px; color:{mat_color};">{mat_name}</div>
-                    <div style="font-size:12px; color:#6b7280;">В договоре: {declared_mat}</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Материал стен (CV)",
+                    value=mat_name,
+                    subtext=f"В договоре: {declared_mat}",
+                    icon_type="money",
+                    is_success=mat_ok,
+                    is_alert=not mat_ok,
+                ),
                 unsafe_allow_html=True,
             )
         with col_i4:
@@ -457,43 +329,47 @@ def main():
                 else f"{comp.facades_count} фас. / {comp.nadir_count} над."
             )
             st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-label">Ракурсы съемки</div>
-                    <div class="metric-value" style="font-size:18px; color:#2563eb;">{comp_badge}</div>
-                    <div style="font-size:12px; color:#6b7280;">Всего кадров БПЛА: {cv_result.analyzed_images_count}</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Ракурсы съемки БПЛА",
+                    value=comp_badge,
+                    subtext=f"Всего кадров БПЛА: {cv_result.analyzed_images_count}",
+                    icon_type="satellite",
+                    is_success=comp.is_fully_compliant,
+                ),
                 unsafe_allow_html=True,
             )
 
         st.write("")
 
-        # DECISION ENGINE CARD
-        card_class = (
-            "decision-card-red"
+        # DECISION ENGINE CARD (Sber Corporate Box)
+        decision_box_class = (
+            "danger"
             if decision.risk_level == "CRITICAL"
-            else ("decision-card-yellow" if decision.risk_level == "MEDIUM" else "decision-card-green")
+            else ("warning" if decision.risk_level == "MEDIUM" else "success")
         )
         st.markdown(
             f"""
-            <div class="{card_class}">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <h3 style="margin:0; font-size:18px;">
-                        🎯 Решение Банка: {decision.strategy_code} — {decision.strategy.value}
+            <div class="sber-decision-box {decision_box_class}">
+                <div class="sber-decision-header">
+                    <h3 class="sber-decision-title">
+                        <span>🎯 Решение Банка: <b>{decision.strategy_code}</b> — {decision.strategy.value}</span>
                     </h3>
-                    <span style="font-weight:700; font-size:14px;">Статус АС Калита: <code>{decision.kalita_status}</code></span>
+                    <span class="sber-pill-status active">
+                        Статус АС «Калита»: <b>{decision.kalita_status}</b>
+                    </span>
                 </div>
-                <p style="margin: 8px 0 4px 0; font-size:14px; font-weight:600;">{decision.action_required}</p>
-                <div style="font-size:13px; color:#4b5563; margin-top:6px;">
-                    <strong>Обоснование решения:</strong>
-                    <ul style="margin:4px 0 0 16px; padding:0;">
+                <p style="margin: 8px 0 10px 0; font-size:15px; font-weight:600; color:#121922;">
+                    {decision.action_required}
+                </p>
+                <div style="font-size:13.5px; color:#4B5563; margin-top:8px;">
+                    <strong>Обоснование алгоритма:</strong>
+                    <ul style="margin:6px 0 0 18px; padding:0; line-height:1.5;">
                         {''.join(f'<li>{r}</li>' for r in decision.reasoning)}
                     </ul>
                 </div>
-                <div style="margin-top:8px; font-size:12px; color:#6b7280;">
-                    <strong>Юридическое основание:</strong> {decision.legal_basis} |
-                    <strong>Финансовый эффект:</strong> {decision.financial_impact_rub:,.0f} ₽
+                <div style="margin-top:12px; padding-top:10px; border-top:1px solid #E5E8ED; font-size:12.5px; color:#687182; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                    <div><strong>Юридическое основание:</strong> {decision.legal_basis}</div>
+                    <div><strong>Финансовый эффект:</strong> <span style="color:#0E7425; font-weight:700;">{decision.financial_impact_rub:,.0f} ₽</span></div>
                 </div>
             </div>
             """,
@@ -679,16 +555,16 @@ def main():
         with col_p1:
             st.markdown("#### Реестр залоговых объектов ИЖС Сибирского банка")
 
-            # Pure HTML table
+            # Pure HTML table in Sber style
             rows_html = ""
             for item in portfolio_data:
                 risk_badge = (
-                    "<span class='badge-red'>КРИТИЧЕСКИЙ</span>"
+                    "<span class='sber-badge-red'>КРИТИЧЕСКИЙ</span>"
                     if item["risk_level"] == "CRITICAL"
                     else (
-                        "<span class='badge-yellow'>ВНИМАНИЕ</span>"
+                        "<span class='sber-badge-yellow'>ВНИМАНИЕ</span>"
                         if item["risk_level"] == "MEDIUM"
-                        else "<span class='badge-green'>ОК</span>"
+                        else "<span class='sber-badge-green'>ОК</span>"
                     )
                 )
                 rows_html += f"""
@@ -704,7 +580,7 @@ def main():
                 """
 
             table_html = f"""
-            <table class="sber-table">
+            <table class="sber-table-v2">
                 <thead>
                     <tr>
                         <th>Кадастровый номер</th>
@@ -742,35 +618,35 @@ def main():
         col_roi1, col_roi2, col_roi3 = st.columns(3)
         with col_roi1:
             st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Сокращение времени инспекции</div>
-                    <div class="metric-value" style="color:#15803d;">96 ч ➔ 15 мин</div>
-                    <div style="font-size:12px; color:#6b7280;">Ускорение цикла в 380 раз</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Сокращение времени инспекции",
+                    value="96 ч ➔ 15 мин",
+                    subtext="Ускорение мониторинга в 380 раз",
+                    icon_type="drone",
+                    is_success=True,
+                ),
                 unsafe_allow_html=True,
             )
         with col_roi2:
             st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Предотвращенные потери (Фрод)</div>
-                    <div class="metric-value" style="color:#b91c1c;">12 000 000 ₽</div>
-                    <div style="font-size:12px; color:#6b7280;">Кейс Бердск (супермаркет на ИЖС)</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Предотвращенные потери (Фрод)",
+                    value="12 000 000 ₽",
+                    subtext="Кейс Бердск: супермаркет на ИЖС",
+                    icon_type="shield_alert",
+                    is_alert=True,
+                ),
                 unsafe_allow_html=True,
             )
         with col_roi3:
             st.markdown(
-                """
-                <div class="metric-card">
-                    <div class="metric-label">Экономия на выездах инспекторов</div>
-                    <div class="metric-value" style="color:#2563eb;">~4 800 ₽ / объект</div>
-                    <div style="font-size:12px; color:#6b7280;">ROI системы окупается за 1.5 мес.</div>
-                </div>
-                """,
+                render_kpi_card(
+                    title="Экономия на выездах инспектора",
+                    value="~4 800 ₽ / объект",
+                    subtext="Окупаемость внедрения за 1.5 мес.",
+                    icon_type="money",
+                    is_success=True,
+                ),
                 unsafe_allow_html=True,
             )
 
@@ -859,8 +735,12 @@ def main():
         href = (
             f'<a href="data:text/html;base64,{b64_act}" '
             f'download="Акт_проверки_залога_{selected_raw_id}.html" '
-            f'style="background:#21a038; color:white; padding:10px 18px; border-radius:6px; '
-            f'text-decoration:none; font-weight:600;">📥 Скачать официальный Акт (HTML / Печать)</a>'
+            f'style="display:inline-flex; align-items:center; gap:8px; '
+            f'background:linear-gradient(108deg, #0e8528 0%, #21a038 52%, #18d24e 100%); '
+            f'color:white; padding:12px 26px; border-radius:9999px; text-decoration:none; '
+            f'font-family:\'SB Sans Text\', sans-serif; font-weight:600; font-size:14px; '
+            f'box-shadow: 0 4px 14px rgba(33, 160, 56, 0.3); transition: transform 0.2s ease;">'
+            f'📥 Скачать официальный Акт проверки залога (Приложение № 1)</a>'
         )
         st.markdown(href, unsafe_allow_html=True)
 

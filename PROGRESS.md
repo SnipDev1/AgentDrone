@@ -41,7 +41,10 @@
 
 ## ⏳ В работе прямо сейчас
 - **Участник 2 (Backend & Decision Engine):** Реализация матрицы 5 стратегий (`src/engine/`) и интеграция с GigaChat API (`src/gigachat_service/`).
-- **Участник 3 (Frontend & Lead):** Каркас Streamlit UI (`src/ui/app.py`), карта Folium и шаблон Акта проверки (Приложение 1).
+- **Участник 3 (Frontend & Lead / Роль №3):** 
+  * Реализована фирменная дизайн-система Сбера (Plasma / `sberbank.ru/ru/person`): официальные шрифты `SBSansText` и `SBSansDisplay`, цветовая схема `#21A038`, SVG логотип Сбера, KPI-виджеты и карточки решений.
+  * Разведена инфраструктура маршрутизации для двух параллельных веток: `/sber` (основной портал с дизайном Сбера, порт 8501) и `/dev` (ветка разработчиков, порт 8502) через Caddy reverse proxy и отдельные systemd сервисы.
+  * Написаны модули `src/ui/sber_theme.py`, `tests/test_sber_theme.py`, конфигурации `deploy/Caddyfile`, `deploy/agentdrone-sber.service`, `deploy/agentdrone-dev.service`, `deploy/setup_routing.sh`.
 
 ---
 
