@@ -215,6 +215,7 @@ def test_cv_pipeline_real_dataset_sample():
 def test_boundary_overlay():
     """Verify cadastral boundary calculation and visual red line rendering."""
     from PIL import Image
+
     from src.cv.boundary_overlay import BoundaryOverlay
     from src.ingestion.cadastral_registry import CadastralParcel
     from src.models.schemas import DroneImageMeta
@@ -257,10 +258,90 @@ def test_boundary_overlay():
     assert overlaid.mode == "RGB"
 
 
+def test_boundary_photogrammetric_projection_and_setback():
+    """Verify 3D photogrammetric projection and 3-meter metric setback line."""
+    from PIL import Image
+
+    from src.cv.boundary_overlay import BoundaryOverlay
+    from src.ingestion.cadastral_registry import CadastralRegistry
+    from src.models.schemas import DroneImageMeta
+
+    parcel = CadastralRegistry.get_parcel("54:07:055001:178")
+    assert parcel is not None
+    assert parcel.polygon_wgs84 is not None
+    assert len(parcel.polygon_wgs84) == 4
+
+    # High nadir shot telemetry
+    meta_nadir = DroneImageMeta(
+        filename="DJI_0002_D.JPG",
+        file_path="mock/path.jpg",
+        latitude=54.815547,
+        longitude=83.240718,
+        altitude_rel_m=37.5,
+        gimbal_pitch_deg=-90.0,
+        gimbal_yaw_deg=77.4,
+        gimbal_roll_deg=180.0,
+    )
+
+    proj_pts = BoundaryOverlay.project_wgs84_polygon(parcel.polygon_wgs84, meta_nadir, 5280, 3956)
+    assert len(proj_pts) == 4
+    # All points should be within or near the sensor bounds
+    for u, v in proj_pts:
+        assert -1000 <= u <= 6500
+        assert -1000 <= v <= 5500
+
+    # Metric setback (СП 53.13330)
+    setback_wgs84 = BoundaryOverlay.compute_metric_setback_wgs84(parcel.polygon_wgs84, setback_m=3.0)
+    assert len(setback_wgs84) == 4
+    setback_proj = BoundaryOverlay.project_wgs84_polygon(setback_wgs84, meta_nadir, 5280, 3956)
+    assert len(setback_proj) == 4
+
+    # Low altitude fallback (<5m)
+    meta_low = DroneImageMeta(
+        filename="DJI_0005_D.JPG",
+        file_path="mock/path.jpg",
+        latitude=54.815420,
+        longitude=83.240829,
+        altitude_rel_m=1.6,
+        gimbal_pitch_deg=-89.9,
+    )
+    assert BoundaryOverlay.project_wgs84_polygon(parcel.polygon_wgs84, meta_low, 5280, 3956) == []
+
+    img_low = Image.new("RGB", (960, 720), color=(120, 120, 120))
+    res_low = BoundaryOverlay.apply_boundary_overlay(img_low, meta_low, parcel)
+    assert res_low.size == (960, 720)
+
+
+def test_boundary_oblique_perspective_with_clipping():
+    """Verify facade shot perspective projection with near-plane frustum clipping."""
+    from src.cv.boundary_overlay import BoundaryOverlay
+    from src.ingestion.cadastral_registry import CadastralRegistry
+    from src.models.schemas import DroneImageMeta
+
+    parcel = CadastralRegistry.get_parcel("54:19:130102:1231")
+    assert parcel is not None
+
+    # Oblique facade shot looking at parcel from side
+    meta_facade = DroneImageMeta(
+        filename="DJI_0006_D.JPG",
+        file_path="mock/path.jpg",
+        latitude=55.056800,
+        longitude=83.147100,
+        altitude_rel_m=34.8,
+        gimbal_pitch_deg=-58.1,
+        gimbal_yaw_deg=-39.9,
+        gimbal_roll_deg=0.0,
+    )
+
+    proj_pts = BoundaryOverlay.project_wgs84_polygon(parcel.polygon_wgs84, meta_facade, 5280, 3956)
+    assert len(proj_pts) >= 3
+
+
 def test_multispectral_ndvi_analysis(tmp_path: Path):
     """Verify NDVI computation and land surface classification from multispectral TIFFs."""
     import numpy as np
     from PIL import Image
+
     from src.cv.multispectral import MultispectralAnalyzer
 
     # Create synthetic 16-bit TIFF bands
