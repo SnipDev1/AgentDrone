@@ -409,3 +409,99 @@ def test_boundary_overlay_with_real_polygon():
     overlaid = BoundaryOverlay.apply_boundary_overlay(img, meta, p178)
     assert overlaid.size == (1200, 800)
     assert overlaid.mode == "RGB"
+
+
+def test_parcel_masking_ignores_neighbor_house():
+    """Verify that a neighbor's house outside parcel boundary does not trigger false progress."""
+    # Synthetic frame: green background
+    img = np.zeros((720, 960, 3), dtype=np.uint8)
+    img[:, :] = (34, 139, 34)  # Grass
+
+    # Neighbor house placed in bottom-right corner (outside parcel)
+    cv2.rectangle(img, (750, 500), (940, 700), (180, 180, 180), -1)  # Neighbor house
+    cv2.rectangle(img, (780, 550), (840, 620), (20, 20, 20), -1)      # Neighbor window
+
+    # Target parcel polygon in center (empty grass)
+    parcel_poly = [(200.0, 150.0), (600.0, 150.0), (600.0, 550.0), (200.0, 550.0)]
+
+    # Analysis WITH parcel polygon mask
+    feat_masked = FeatureExtractor.extract_from_image(img, "test_masked.jpg", parcel_polygon=parcel_poly)
+    assert feat_masked.has_large_structure is False
+    assert feat_masked.structure_area_ratio < 0.02
+    assert feat_masked.is_parcel_empty is True
+
+    # Evaluated readiness must be strictly 0%
+    pct, stage, title, elems = ReadinessClassifier.evaluate([feat_masked])
+    assert stage == 0
+    assert pct == 0.0
+    assert elems.has_walls is False
+    assert elems.has_roof is False
+
+
+def test_readiness_unfinished_box_vs_closed_contour():
+    """Verify that unfinished box without glazing/roof is strictly Stage 50, not 100."""
+    # 1. Unfinished box: walls present, but roof missing and no glazed windows
+    unfinished_box = ImageFeatures(
+        image_name="unfinished_box.jpg",
+        width=960,
+        height=720,
+        vegetation_ratio=0.45,
+        edge_density=0.12,
+        horizontal_lines_count=28,
+        vertical_lines_count=22,
+        structural_density=0.50,
+        dominant_hue=25.0,
+        mean_saturation=50.0,
+        color_shares={"gray_block": 0.40},
+        has_large_structure=True,
+        structure_area_ratio=0.15,
+        has_roof_contour=False,       # No roof
+        window_openings_count=3,
+        glazed_windows_count=0,       # No glazed windows (empty holes)
+        empty_openings_count=3,
+        has_finished_facade=False,    # Raw blocks
+        has_finished_roof=False,
+        is_parcel_empty=False,
+    )
+
+    pct_50, stage_50, title_50, elem_50 = ReadinessClassifier.evaluate([unfinished_box])
+    assert stage_50 == 50
+    assert 45.0 <= pct_50 <= 65.0
+    assert elem_50.has_foundation is True
+    assert elem_50.has_walls is True
+    assert elem_50.has_roof is False
+    assert elem_50.has_windows_doors is False
+    assert "50%" in title_50
+
+    # 2. Completed building: walls + roof + confirmed glazed windows
+    completed_house = ImageFeatures(
+        image_name="completed_house.jpg",
+        width=960,
+        height=720,
+        vegetation_ratio=0.30,
+        edge_density=0.15,
+        horizontal_lines_count=40,
+        vertical_lines_count=30,
+        structural_density=0.70,
+        dominant_hue=15.0,
+        mean_saturation=60.0,
+        color_shares={"red_brick": 0.50},
+        has_large_structure=True,
+        structure_area_ratio=0.20,
+        has_roof_contour=True,
+        window_openings_count=4,
+        glazed_windows_count=4,       # Glazed windows confirmed
+        empty_openings_count=0,
+        has_finished_facade=True,
+        has_finished_roof=True,
+        is_parcel_empty=False,
+    )
+
+    pct_100, stage_100, title_100, elem_100 = ReadinessClassifier.evaluate([completed_house])
+    assert stage_100 == 100
+    assert pct_100 >= 85.0
+    assert elem_100.has_foundation is True
+    assert elem_100.has_walls is True
+    assert elem_100.has_roof is True
+    assert elem_100.has_windows_doors is True
+    assert "100%" in title_100

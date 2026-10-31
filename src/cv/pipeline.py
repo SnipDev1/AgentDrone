@@ -1,7 +1,8 @@
 """Unified Computer Vision Pipeline for AgentDrone.
 
 Executes complete analysis of a cadastral plot:
-Drone Ingestion -> Geo & Angle Validation -> CV Feature Extraction ->
+Drone Ingestion -> Geo & Angle Validation -> Cadastral Parcel Masking ->
+Gatekeeper (0% Vacant Land vs Construction) -> CV Feature Extraction ->
 Readiness 0/50/100% -> Material Classification -> Anti-Fraud & Defect Analysis ->
 Structured Inspection Result.
 """
@@ -9,9 +10,11 @@ Structured Inspection Result.
 from __future__ import annotations
 
 from pathlib import Path
+import cv2
 
 from ..config import find_dataset_root
 from ..ingestion.angle_detector import AngleCompletenessDetector
+from ..ingestion.cadastral_registry import CadastralRegistry
 from ..ingestion.cadastral_validator import CadastralValidator
 from ..ingestion.notes_parser import NotesParser
 from ..ingestion.ppk_parser import PPKParser
@@ -21,8 +24,10 @@ from ..models.schemas import (
     CVInspectionResult,
     DroneImageMeta,
     ShotAngleType,
+    StructuralElements,
     WallMaterial,
 )
+from .boundary_overlay import BoundaryOverlay
 from .feature_extractor import FeatureExtractor, ImageFeatures
 from .fraud_detector import FraudDetector
 from .material_classifier import MaterialClassifier
@@ -74,31 +79,93 @@ class CVPipeline:
         # 3. Angle Completeness & Cadastral Geocheck
         completeness = AngleCompletenessDetector.evaluate(shots_meta)
         geocheck = CadastralValidator.validate_flight_geofence(plot_id, shots_meta)
+        parcel = CadastralRegistry.get_parcel(plot_id)
 
-        # 4. Computer Vision Feature Extraction
+        # 4. Computer Vision Feature Extraction with Cadastral Parcel Masking
+        # Identify nadir shots for the Stage-1 Gatekeeper check
+        nadir_indices: set[int] = set()
+        for idx, m in enumerate(shots_meta):
+            if (m.gimbal_pitch_deg is not None and m.gimbal_pitch_deg <= -75.0) or (
+                m.shot_angle in (ShotAngleType.NADIR_HIGH, ShotAngleType.NADIR_LOW, ShotAngleType.NADIR_OTHER)
+            ):
+                nadir_indices.add(idx)
+
         features_list: list[ImageFeatures] = []
-        for img_path in drone_jpgs:
-            feat = FeatureExtractor.extract_from_file(img_path)
+        nadir_features: list[ImageFeatures] = []
+
+        for i, (img_path, meta) in enumerate(zip(drone_jpgs, shots_meta)):
+            # Project parcel polygon in image coordinates if parcel and telemetry are available
+            parcel_poly = None
+            if parcel is not None and meta.latitude is not None and meta.longitude is not None:
+                # Protect against spoofed coordinates hundreds of km away
+                import math
+                lat_m = math.radians((parcel.centroid_lat + meta.latitude) / 2.0)
+                dE = (parcel.centroid_lon - meta.longitude) * 111139.0 * math.cos(lat_m)
+                dN = (parcel.centroid_lat - meta.latitude) * 111139.0
+                dist_m = math.hypot(dE, dN)
+                if dist_m <= 350.0:
+                    img_probe = cv2.imread(str(img_path))
+                    if img_probe is not None:
+                        ih, iw = img_probe.shape[:2]
+                        ground_poly = BoundaryOverlay.calculate_ground_polygon(parcel)
+                        proj_poly = BoundaryOverlay.project_wgs84_polygon(ground_poly, meta, iw, ih)
+                        if proj_poly and len(proj_poly) >= 3:
+                            parcel_poly = proj_poly
+
+            feat = FeatureExtractor.extract_from_file(img_path, parcel_polygon=parcel_poly)
             if feat is not None:
                 features_list.append(feat)
+                if i in nadir_indices:
+                    nadir_features.append(feat)
+
+        # 4b. Gatekeeper: Check if nadir photography confirms a vacant plot inside parcel
+        # If the nadir shots inside the cadastral polygon show only grass/ground and no structure,
+        # we strictly lock 0% stage and prevent neighbor buildings in oblique shots from causing false positives.
+        is_empty_plot = False
+        if nadir_features:
+            is_empty_plot = all(
+                getattr(f, "is_parcel_empty", False) or (not f.has_large_structure and f.structure_area_ratio < 0.035)
+                for f in nadir_features
+            )
+        elif features_list:
+            is_empty_plot = all(getattr(f, "is_parcel_empty", False) for f in features_list)
 
         # 5. Readiness & Stage Classification
-        readiness_pct, stage, stage_title, structural_elements = ReadinessClassifier.evaluate(features_list)
+        if is_empty_plot:
+            readiness_pct = 0.0
+            stage = 0
+            stage_title = "0% — Земельный участок (Строительство не начато)"
+            structural_elements = StructuralElements(
+                has_foundation=False,
+                has_walls=False,
+                has_roof=False,
+                has_windows_doors=False,
+                foundation_confidence=0.0,
+                walls_confidence=0.0,
+                roof_confidence=0.0,
+                windows_doors_confidence=0.0,
+            )
+        else:
+            readiness_pct, stage, stage_title, structural_elements = ReadinessClassifier.evaluate(features_list)
 
         # 6. Material Classification
-        # Prefer facade shots for material classification
-        facade_feats = [
-            f for f, m in zip(features_list, shots_meta)
-            if m.shot_angle in (
-                ShotAngleType.FACADE_NORTH,
-                ShotAngleType.FACADE_SOUTH,
-                ShotAngleType.FACADE_EAST,
-                ShotAngleType.FACADE_WEST,
-                ShotAngleType.OBLIQUE_OTHER,
-            )
-        ]
-        target_material_feats = facade_feats if facade_feats else features_list
-        detected_material, material_conf = MaterialClassifier.classify(target_material_feats)
+        if is_empty_plot:
+            detected_material = WallMaterial.UNKNOWN
+            material_conf = 0.0
+        else:
+            # Prefer facade shots for material classification
+            facade_feats = [
+                f for f, m in zip(features_list, shots_meta)
+                if m.shot_angle in (
+                    ShotAngleType.FACADE_NORTH,
+                    ShotAngleType.FACADE_SOUTH,
+                    ShotAngleType.FACADE_EAST,
+                    ShotAngleType.FACADE_WEST,
+                    ShotAngleType.OBLIQUE_OTHER,
+                )
+            ]
+            target_material_feats = facade_feats if facade_feats else features_list
+            detected_material, material_conf = MaterialClassifier.classify(target_material_feats)
 
         if is_berdsk:
             detected_material = WallMaterial.SANDWICH_PANEL
