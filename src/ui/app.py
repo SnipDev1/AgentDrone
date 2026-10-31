@@ -26,9 +26,10 @@ from PIL import Image
 from src.cv.boundary_overlay import BoundaryOverlay
 from src.cv.pipeline import CVPipeline
 from src.dataset import DroneDataset
+from src.dataset_manager import ParcelManager, sanitize_plot_id
 from src.engine.decision_engine import DecisionEngine
 from src.gigachat_service import GigaChatInspectorService, build_inspector_prompt
-from src.ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
+from src.ingestion.cadastral_registry import CadastralParcel, CadastralRegistry, normalize_cadastral_id
 from src.ingestion.credit_registry import CreditRegistry
 from src.models.schemas import CreditObject, CVInspectionResult, StrategyRecommendation
 from src.models.strategy import ReportPhotoItem
@@ -218,6 +219,34 @@ def build_plot_summary(
 
     if inspected is not None:
         cv_res, credit_obj, dec = inspected
+        d_lat = (
+            cv_res.geocheck.drone_center_lat
+            if cv_res.geocheck and cv_res.geocheck.drone_center_lat
+            else 55.0
+        )
+        d_lon = (
+            cv_res.geocheck.drone_center_lon
+            if cv_res.geocheck and cv_res.geocheck.drone_center_lon
+            else 83.0
+        )
+        lat = parcel.centroid_lat if parcel else d_lat
+        lon = parcel.centroid_lon if parcel else d_lon
+        if parcel:
+            poly = BoundaryOverlay.calculate_ground_polygon(parcel)
+        elif cv_res.geocheck and cv_res.geocheck.drone_center_lat:
+            dyn_parcel = CadastralParcel(
+                cadastral_id=cv_res.cadastral_id,
+                raw_folder_name=pid,
+                address=credit_obj.address,
+                centroid_lat=d_lat,
+                centroid_lon=d_lon,
+                area_sqm=1000.0,
+                permitted_use="Для индивидуального жилищного строительства (ИЖС)",
+            )
+            poly = BoundaryOverlay.calculate_ground_polygon(dyn_parcel)
+        else:
+            poly = []
+
         return {
             "raw_id": pid,
             "cadastral_id": cv_res.cadastral_id,
@@ -231,9 +260,9 @@ def build_plot_summary(
             "strategy_code": dec.strategy_code,
             "risk_level": dec.risk_level,
             "fraud_flag": cv_res.fraud_risk_flag,
-            "lat": parcel.centroid_lat if parcel else 55.0,
-            "lon": parcel.centroid_lon if parcel else 83.0,
-            "polygon": BoundaryOverlay.calculate_ground_polygon(parcel) if parcel else [],
+            "lat": lat,
+            "lon": lon,
+            "polygon": poly,
             "kalita_status": dec.kalita_status,
             "days_overdue": credit_obj.days_overdue,
             "is_inspected": True,
@@ -295,6 +324,82 @@ def analyze_portfolio_summary(
     return summary
 
 
+def handle_delete_plot(plot_id: str) -> None:
+    """Delete parcel folder from server and synchronize application state."""
+    try:
+        deleted = ParcelManager.delete_plot(plot_id)
+        if deleted:
+            get_available_plot_ids.clear()
+            analyze_single_plot.clear()
+            st.cache_data.clear()
+            if "inspected_plots" in st.session_state and isinstance(
+                st.session_state.inspected_plots, dict
+            ):
+                st.session_state.inspected_plots.pop(plot_id, None)
+            giga_k = f"giga_summary_{plot_id}"
+            if giga_k in st.session_state:
+                del st.session_state[giga_k]
+            if "last_visited_plot_id" in st.session_state:
+                st.session_state.last_visited_plot_id = None
+            if "plot_select_box" in st.session_state:
+                del st.session_state["plot_select_box"]
+            if "selected_plot_id" in st.session_state:
+                del st.session_state["selected_plot_id"]
+            st.toast(f"Папка участка {normalize_cadastral_id(plot_id)} удалена с сервера!", icon="🗑️")
+            st.rerun()
+        else:
+            st.error(f"Не удалось найти папку участка {plot_id} на сервере.")
+    except Exception as e:
+        st.error(f"Ошибка при удалении папки: {e}")
+
+
+def handle_upload_zip(uploaded_zip_file, target_plot_id: str | None = None) -> None:
+    """Extract and deploy an uploaded ZIP archive of parcel folders."""
+    try:
+        target_id = target_plot_id.strip() if target_plot_id and target_plot_id.strip() else None
+        new_ids = ParcelManager.upload_zip(uploaded_zip_file.getvalue(), target_plot_id=target_id)
+        if new_ids:
+            get_available_plot_ids.clear()
+            analyze_single_plot.clear()
+            st.cache_data.clear()
+            st.session_state["selected_plot_id"] = new_ids[0]
+            st.session_state.last_visited_plot_id = None
+            st.session_state.pop("plot_select_box", None)
+            st.toast(
+                f"Участок {normalize_cadastral_id(new_ids[0])} успешно загружен на сервер!",
+                icon="✅",
+            )
+            st.rerun()
+        else:
+            st.warning("В архиве не найдено подходящих файлов или папок участков.")
+    except Exception as e:
+        st.error(f"Ошибка при распаковке архива: {e}")
+
+
+def handle_upload_files(plot_id: str, uploaded_files: list) -> None:
+    """Deploy raw drone inspection files into a named parcel folder."""
+    clean_id = sanitize_plot_id(plot_id) if plot_id else ""
+    if not clean_id:
+        st.error("Пожалуйста, укажите кадастровый номер для создаваемой папки.")
+        return
+    if not uploaded_files:
+        st.error("Пожалуйста, выберите файлы съемки для загрузки.")
+        return
+    try:
+        file_payload = [(f.name, f.getvalue()) for f in uploaded_files]
+        saved_id = ParcelManager.upload_files(clean_id, file_payload)
+        get_available_plot_ids.clear()
+        analyze_single_plot.clear()
+        st.cache_data.clear()
+        st.session_state["selected_plot_id"] = saved_id
+        st.session_state.last_visited_plot_id = None
+        st.session_state.pop("plot_select_box", None)
+        st.toast(f"Папка {normalize_cadastral_id(saved_id)} сохранена на сервере!", icon="✅")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Ошибка при сохранении файлов: {e}")
+
+
 def main():
     plot_ids = get_available_plot_ids()
 
@@ -303,6 +408,38 @@ def main():
         st.session_state.inspected_plots = {}
     if "last_visited_plot_id" not in st.session_state:
         st.session_state.last_visited_plot_id = None
+
+    if not plot_ids:
+        st.markdown(
+            """
+            <div class="main-header">
+                <h1>🛸 AgentDrone — Мониторинг залогов БПЛА</h1>
+                <p>Сибирский банк ПАО Сбербанк • Центр залогового мониторинга & АС «Калита»</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.warning("⚠️ В каталоге на сервере отсутствуют доступные папки с участками.")
+        st.subheader("📤 Загрузите первую папку участка на сервер")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 📦 Загрузить ZIP-архив участка")
+            ezip = st.file_uploader("Архив (.zip):", type=["zip"], key="empty_zip")
+            ecad = st.text_input("Кадастровый номер (опционально):", key="empty_cad")
+            if st.button("🚀 Загрузить архив", type="primary", key="empty_btn_zip"):
+                if ezip:
+                    handle_upload_zip(ezip, ecad)
+                else:
+                    st.error("Выберите ZIP-файл")
+        with c2:
+            st.markdown("#### 📄 Загрузить файлы съемки")
+            efcad = st.text_input("Кадастровый номер (обязательно):", key="empty_fcad")
+            effiles = st.file_uploader(
+                "Файлы съемки:", accept_multiple_files=True, key="empty_ffiles"
+            )
+            if st.button("💾 Сохранить файлы", type="primary", key="empty_btn_files"):
+                handle_upload_files(efcad, effiles)
+        return
 
     # Sidebar: Logo & Navigation
     st.sidebar.image(
@@ -313,7 +450,13 @@ def main():
 
     filter_risk = st.sidebar.selectbox(
         "Фильтр по статусу риска:",
-        ["Все объекты (13)", "Только проверенные", "Ожидают проверки", "Только с рисками / Stop-Fraud", "Без рисков (ОК)"],
+        [
+            f"Все объекты ({len(plot_ids)})",
+            "Только проверенные",
+            "Ожидают проверки",
+            "Только с рисками / Stop-Fraud",
+            "Без рисков (ОК)",
+        ],
     )
 
     # Initial portfolio data assembly to evaluate filter
@@ -526,12 +669,81 @@ def main():
                 del st.session_state["plot_select_box"]
             st.rerun()
 
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📁 Управление участками")
+
+    with st.sidebar.expander("📤 Загрузить участок на сервер", expanded=False):
+        sb_mode = st.radio(
+            "Формат загрузки:",
+            ["Архив .ZIP", "Файлы съемки"],
+            key="sb_up_mode",
+            horizontal=True,
+        )
+        if sb_mode == "Архив .ZIP":
+            sb_zip = st.file_uploader(
+                "Архив участка (.zip):",
+                type=["zip"],
+                key="sb_zip_file",
+                help="Архив с папкой участка (DJI JPG, Timestamp.MRK, PPK-файлы)",
+            )
+            sb_cad = st.text_input(
+                "Кадастровый номер (опционально):",
+                key="sb_zip_cad",
+                placeholder="5407055001178",
+            )
+            if st.button("🚀 Загрузить архив", use_container_width=True, key="sb_btn_zip"):
+                if sb_zip:
+                    handle_upload_zip(sb_zip, sb_cad)
+                else:
+                    st.error("Выберите ZIP-файл")
+        else:
+            sb_cad_files = st.text_input(
+                "Кадастровый номер (обязательно):",
+                key="sb_files_cad",
+                placeholder="5407055001178",
+            )
+            sb_files = st.file_uploader(
+                "Файлы съемки:",
+                accept_multiple_files=True,
+                key="sb_raw_files",
+            )
+            if st.button("💾 Сохранить файлы", use_container_width=True, key="sb_btn_files"):
+                handle_upload_files(sb_cad_files, sb_files)
+
+    with st.sidebar.expander("🗑️ Удалить участок с сервера", expanded=False):
+        if plot_ids:
+            del_target = st.selectbox(
+                "Участок для удаления:",
+                plot_ids,
+                index=plot_ids.index(selected_raw_id) if selected_raw_id in plot_ids else 0,
+                format_func=lambda pid: f"{normalize_cadastral_id(pid)} ({pid})",
+                key="sb_del_select",
+            )
+            stats_del = ParcelManager.get_plot_stats(del_target)
+            st.caption(
+                f"📁 Файлов: {stats_del['total_files']} | Размер: {stats_del['size_mb']} МБ"
+            )
+            confirm_del = st.checkbox(
+                "Подтверждаю удаление папки с сервера",
+                key="sb_confirm_del_cb",
+            )
+            if st.button(
+                "❌ Удалить выбранный участок",
+                disabled=not confirm_del,
+                use_container_width=True,
+                key="sb_btn_delete",
+            ):
+                handle_delete_plot(del_target)
+        else:
+            st.info("Нет участков для удаления")
+
     # Main Tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🛸 Инспекция БПЛА & CV Анализ",
         "🗺️ ГИС-карта залогов НСО",
         "📊 Портфельный мониторинг & ROI",
         "📑 Акт проверки залога (Приложение 1)",
+        "📁 Управление датасетом (Загрузка / Удаление)",
     ])
 
     # =========================================================================
@@ -541,7 +753,7 @@ def main():
         parcel = CadastralRegistry.get_parcel(selected_raw_id)
 
         # Header for the selected plot
-        c_title, c_badge = st.columns([3, 1])
+        c_title, c_del, c_badge = st.columns([3, 1, 1])
         with c_title:
             st.subheader(f"Участок: {cv_result.cadastral_id}")
             address_str = parcel.address if parcel else credit_obj.address
@@ -549,6 +761,15 @@ def main():
                 f"📍 {address_str} | Заемщик: **{credit_obj.borrower_name}** | "
                 f"Договор: **{credit_obj.credit_agreement_number}**"
             )
+        with c_del:
+            with st.popover("🗑️ Удалить участок", help="Удалить эту папку участка с сервера"):
+                st.warning(f"Удалить папку участка {cv_result.cadastral_id}?")
+                p_stats = ParcelManager.get_plot_stats(selected_raw_id)
+                st.write(f"• Файлов на сервере: **{p_stats['total_files']}**")
+                st.write(f"• Размер на диске: **{p_stats['size_mb']} МБ**")
+                st.write(f"• Путь: `{p_stats['dir_path']}`")
+                if st.button("⚠️ Подтверждаю удаление", type="primary", key="tab1_btn_del_confirm"):
+                    handle_delete_plot(selected_raw_id)
         with c_badge:
             if decision.risk_level == "CRITICAL":
                 st.markdown(
@@ -1192,6 +1413,143 @@ def main():
             f'text-decoration:none; font-weight:600;">📥 Скачать официальный Акт (HTML / Печать A4)</a>'
         )
         st.markdown(href, unsafe_allow_html=True)
+
+    # =========================================================================
+    # TAB 5: DATASET MANAGEMENT (UPLOAD / DELETE PARCEL FOLDERS)
+    # =========================================================================
+    with tab5:
+        st.subheader("📁 Центр управления папками участков на сервере")
+        st.markdown(
+            "Серверный модуль для загрузки и удаления съемок БПЛА. Все данные поставляются "
+            "**в стандартном формате БПЛА**: папка с номером участка, содержащая снимки DJI (`*.JPG`), "
+            "лог меток затвора (`Timestamp.MRK`), PPK-наблюдения (`*.obs`, `*.nav`, `*.bin`) и служебные файлы."
+        )
+
+        col_up, col_list = st.columns([1, 1], gap="large")
+
+        with col_up:
+            st.markdown("### 📤 Загрузить новую папку на сервер")
+            tab_z, tab_f = st.tabs(["📦 ZIP-архив папки участка", "📄 Выбор файлов съемки"])
+
+            with tab_z:
+                st.info(
+                    "💡 **Рекомендуемый способ:** упакуйте папку участка (или несколько папок) в `.zip` и загрузите. "
+                    "Система автоматически распакует данные, проверит структуру и подключит объект к мониторингу."
+                )
+                tab5_zip = st.file_uploader(
+                    "Перетащите ZIP-архив с папкой участка:",
+                    type=["zip"],
+                    key="tab5_zip_file",
+                    help="Поддерживаются как одиночные папки, так и архивы с несколькими участками",
+                )
+                tab5_cad_override = st.text_input(
+                    "Кадастровый номер папки (опционально, если архив не содержит имя папки):",
+                    placeholder="5407055001178",
+                    key="tab5_zip_override",
+                )
+                if st.button(
+                    "🚀 Загрузить и развернуть на сервере",
+                    type="primary",
+                    key="tab5_btn_zip_main",
+                    use_container_width=True,
+                ):
+                    if tab5_zip:
+                        with st.spinner("📦 Распаковка архива и сохранение на сервере..."):
+                            handle_upload_zip(tab5_zip, tab5_cad_override)
+                    else:
+                        st.error("Пожалуйста, выберите ZIP-архив для загрузки.")
+
+            with tab_f:
+                st.info(
+                    "Укажите кадастровый номер и выберите файлы съемки "
+                    "(фотографии JPG, файл Timestamp.MRK, файлы PPK)."
+                )
+                tab5_plot_id = st.text_input(
+                    "Кадастровый номер создаваемой папки (обязательно):",
+                    placeholder="Например: 5419163001999 или 54:19:163001:999",
+                    key="tab5_manual_id",
+                )
+                tab5_files = st.file_uploader(
+                    "Выберите файлы съемки БПЛА:",
+                    accept_multiple_files=True,
+                    key="tab5_manual_files",
+                )
+                if tab5_files:
+                    st.caption(f"Выбрано файлов: **{len(tab5_files)}**")
+                if st.button(
+                    "💾 Сохранить папку на сервере",
+                    type="primary",
+                    key="tab5_btn_files_main",
+                    use_container_width=True,
+                ):
+                    with st.spinner("💾 Сохранение файлов на сервере..."):
+                        handle_upload_files(tab5_plot_id, tab5_files)
+
+        with col_list:
+            st.markdown(f"### 📋 Папки участков на сервере ({len(plot_ids)})")
+            root_path = ParcelManager.get_dataset_root()
+            st.caption(f"📂 Корневой каталог датасета: `{root_path}`")
+
+            if not plot_ids:
+                st.warning("На сервере пока нет доступных папок.")
+            else:
+                for pid in plot_ids:
+                    p_info = ParcelManager.get_plot_stats(pid)
+                    norm_name = normalize_cadastral_id(pid)
+                    is_active = (pid == selected_raw_id)
+                    border_color = "#21a038" if is_active else "#e5e7eb"
+
+                    with st.container():
+                        st.markdown(
+                            f"""
+                            <div style="border: 2px solid {border_color}; border-radius: 8px; """
+                            f"""padding: 12px; margin-bottom: 10px; background: white;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <div style="font-size:15px; font-weight:700; color:#1f2937;">
+                                        {'📍 ' if is_active else '📁 '} {norm_name}
+                                        <span style="font-size:12px; color:#6b7280; font-weight:normal;">({pid})</span>
+                                    </div>
+                                    <div style="font-size:12px; color:#15803d; font-weight:600;">
+                                        {'● Выбран для инспекции' if is_active else ''}
+                                    </div>
+                                </div>
+                                <div style="font-size:12px; color:#4b5563; margin-top:6px;">
+                                    📷 RGB-фото: <b>{p_info['rgb_count']}</b> |
+                                    🛰️ MRK: <b>{'Да' if p_info['has_mrk'] else 'Нет'}</b> |
+                                    📡 PPK: <b>{'Да' if p_info['has_ppk'] else 'Нет'}</b> |
+                                    💾 Размер: <b>{p_info['size_mb']} МБ</b>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        c_act1, c_act2 = st.columns([3, 2])
+                        with c_act1:
+                            if not is_active:
+                                if st.button(
+                                    f"🔍 Открыть {norm_name}",
+                                    key=f"t5_inspect_{pid}",
+                                    use_container_width=True,
+                                ):
+                                    st.session_state["selected_plot_id"] = pid
+                                    st.session_state.last_visited_plot_id = None
+                                    st.session_state.pop("plot_select_box", None)
+                                    st.rerun()
+                            else:
+                                st.success("Текущий объект")
+                        with c_act2:
+                            with st.popover("🗑️ Удалить", use_container_width=True):
+                                st.warning(f"Удалить папку {norm_name} с сервера?")
+                                st.caption(
+                                    f"Файлов: {p_info['total_files']} | Размер: {p_info['size_mb']} МБ"
+                                )
+                                if st.button(
+                                    "⚠️ Да, удалить навсегда",
+                                    type="primary",
+                                    key=f"t5_del_confirm_{pid}",
+                                    use_container_width=True,
+                                ):
+                                    handle_delete_plot(pid)
 
 
 if __name__ == "__main__":
