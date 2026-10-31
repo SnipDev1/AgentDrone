@@ -53,6 +53,43 @@ class DroneImageMeta(BaseModel):
     shutter_index: int | None = None
     drone_model: str | None = None
     is_dji: bool = True
+    # Precision MRK metrology fields
+    std_lat_m: float | None = None
+    std_lon_m: float | None = None
+    std_hgt_m: float | None = None
+    horizontal_accuracy_m: float | None = None
+    gps_week: int | None = None
+    gps_time_sec: float | None = None
+    antenna_offset_mm: tuple[float, float, float] | None = None
+
+
+class PPKTelemetrySummary(BaseModel):
+    """RINEX / PPK GNSS dual-frequency carrier-phase telemetry summary."""
+    has_ppk: bool = False
+    obs_filename: str = ""
+    nav_filename: str = ""
+    rinex_version: str = "3.05"
+    constellations: list[str] = Field(default_factory=list)
+    approx_satellites_tracked: int = 0
+    start_time_utc: str = ""
+    end_time_utc: str = ""
+    duration_sec: float = 0.0
+    dual_frequency_l1_l2: bool = True
+    carrier_phase_kinematic: bool = True
+    anti_spoofing_verified: bool = True
+    geodetic_survey_grade: str = "Высокоточная геодезическая привязка (СКО < 5 см)"
+
+
+class MultispectralAnalysis(BaseModel):
+    """DJI Mavic 3M multispectral 4-band analysis (NIR, Red, Green, RedEdge)."""
+    has_multispectral: bool = False
+    mean_ndvi: float = 0.0
+    construction_soil_pct: float = 0.0
+    vegetation_pct: float = 0.0
+    site_activity_status: str = "Норма"
+    weed_overgrowth_risk: str = "Низкий"
+    bands_available: list[str] = Field(default_factory=list)
+    heatmap_rel_path: str | None = None
 
 
 class CompletenessReport(BaseModel):
@@ -117,6 +154,9 @@ class CVInspectionResult(BaseModel):
     recommendation_hint: str = ""
     analyzed_images_count: int = 0
     shots_metadata: list[DroneImageMeta] = Field(default_factory=list)
+    ppk_summary: PPKTelemetrySummary | None = None
+    multispectral: MultispectralAnalysis | None = None
+    operator_notes: list[str] = Field(default_factory=list)
 
 
 class CreditObject(BaseModel):

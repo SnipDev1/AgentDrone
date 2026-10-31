@@ -255,3 +255,36 @@ def test_boundary_overlay():
     overlaid = BoundaryOverlay.apply_boundary_overlay(img, meta, parcel)
     assert overlaid.size == (960, 720)
     assert overlaid.mode == "RGB"
+
+
+def test_multispectral_ndvi_analysis(tmp_path: Path):
+    """Verify NDVI computation and land surface classification from multispectral TIFFs."""
+    import numpy as np
+    from PIL import Image
+    from src.cv.multispectral import MultispectralAnalyzer
+
+    # Create synthetic 16-bit TIFF bands
+    # Zone 1: soil / building (low NIR, moderate Red) -> NDVI ~ 0.1
+    # Zone 2: dense grass (high NIR, low Red) -> NDVI ~ 0.7
+    w, h = 100, 100
+    nir_data = np.zeros((h, w), dtype=np.uint16)
+    r_data = np.zeros((h, w), dtype=np.uint16)
+
+    nir_data[:50, :] = 12000  # soil
+    r_data[:50, :] = 10000
+
+    nir_data[50:, :] = 45000  # dense greenery
+    r_data[50:, :] = 8000
+
+    im_nir = Image.fromarray(nir_data)
+    im_r = Image.fromarray(r_data)
+
+    im_nir.save(tmp_path / "DJI_0001_MS_NIR.TIF")
+    im_r.save(tmp_path / "DJI_0001_MS_R.TIF")
+
+    res = MultispectralAnalyzer.analyze_plot(tmp_path, generate_heatmap=False)
+    assert res.has_multispectral is True
+    assert 0.10 <= res.mean_ndvi <= 0.60
+    assert res.construction_soil_pct >= 40.0
+    assert res.vegetation_pct >= 40.0
+    assert len(res.bands_available) >= 2

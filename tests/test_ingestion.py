@@ -207,3 +207,54 @@ def test_cadastral_validator_geofence():
     assert check_fake.is_correct_plot is False
     assert "ОШИБКА" in check_fake.verification_status
     assert check_fake.distance_to_cadastre_m > 1000.0
+
+
+def test_ppk_parser_rinex(tmp_path: Path):
+    """Verify RINEX 3.05 PPKOBS parsing with multiple GNSS constellations."""
+    from src.ingestion.ppk_parser import PPKParser
+
+    obs_content = (
+        "     3.05           OBSERVATION DATA    M: Mixed            RINEX VERSION / TYPE\n"
+        "G    8 C1C L1C D1C S1C C2W L2W D2W S2W                      SYS / # / OBS TYPES\n"
+        "R    8 C1C L1C D1C S1C C2P L2P D2P S2P                      SYS / # / OBS TYPES\n"
+        "E    8 C1C L1C D1C S1C C7Q L7Q D7Q S7Q                      SYS / # / OBS TYPES\n"
+        "C    8 C2I L2I D2I S2I C7I L7I D7I S7I                      SYS / # / OBS TYPES\n"
+        "  2026     8     7     5    48   44.0000000     GPS         TIME OF FIRST OBS\n"
+        "  2026     8     7     5    54   25.0000000     GPS         TIME OF LAST OBS\n"
+        "                                                            END OF HEADER\n"
+        "> 2026  8  7  5 48 44.0000000  0 45\n"
+        "G 8  23213424.729\n"
+    )
+    obs_file = tmp_path / "DJI_test_PPKOBS.obs"
+    obs_file.write_text(obs_content, encoding="utf-8")
+
+    summary = PPKParser.parse_plot_ppk(tmp_path)
+    assert summary.has_ppk is True
+    assert summary.approx_satellites_tracked == 45
+    assert any("GPS" in s for s in summary.constellations)
+    assert any("ГЛОНАСС" in s for s in summary.constellations)
+    assert "2026-08-07" in summary.start_time_utc
+    assert summary.dual_frequency_l1_l2 is True
+
+
+def test_notes_parser_hazards(tmp_path: Path):
+    """Verify pilot field notes parsing and hazard detection."""
+    from src.ingestion.notes_parser import NotesParser
+
+    note_text = (
+        "Бердск, Энгельса 4 это супермаркет, который мы сфотографировали. "
+        "Вокруг много деревьев и густая ЛЭП, близко подлететь не получилось."
+    )
+    note_file = tmp_path / "note.txt"
+    note_file.write_text(note_text, encoding="utf-8")
+
+    notes = NotesParser.parse_plot_notes(tmp_path)
+    assert len(notes) == 1
+    assert "супермаркет" in notes[0]
+
+    frauds, defects = NotesParser.detect_note_hazards(notes)
+    assert len(frauds) >= 1
+    assert any("коммерческий" in f or "супермаркет" in f for f in frauds)
+    assert len(defects) >= 2
+    assert any("ЛЭП" in d for d in defects)
+    assert any("дерев" in d for d in defects)
