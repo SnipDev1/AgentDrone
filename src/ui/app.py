@@ -856,7 +856,7 @@ def main():
                     }}).addTo(map);
 
                     // Official Cadastral Boundary Polygon (Красные линии ЗУ)
-                    if (item.polygon && item.polygon.length === 4) {{
+                    if (item.polygon && item.polygon.length >= 3) {{
                         var poly = L.polygon(item.polygon, {{
                             color: "#dc2626",
                             fillColor: color,

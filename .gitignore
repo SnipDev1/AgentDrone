@@ -1,7 +1,8 @@
 # Data folders / large datasets
 dataset/
 24.09.20206/
-data/
+data/*
+!data/*.json
 downloads/
 *.part
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image
 
 from ..models.schemas import DroneImageMeta, ShotAngleType
+from .cadastral_validator import haversine_distance_m
 
 
 @dataclass
@@ -212,10 +213,18 @@ class TelemetryParser:
         gps_time_sec = None
         ant_offset = None
 
+        exif_lat = lat
+        exif_lon = lon
+        mrk_lat = None
+        mrk_lon = None
+        telemetry_discrepancy_m = None
+        is_telemetry_consistent = True
+
         # Cross-reference with MRK log if available
         if mrk_records and shutter_idx and shutter_idx in mrk_records:
             mrk = mrk_records[shutter_idx]
-            # MRK provides centimeter-accurate RTK coordinates
+            mrk_lat = mrk.latitude
+            mrk_lon = mrk.longitude
             lat = mrk.latitude
             lon = mrk.longitude
             alt_abs = mrk.ellipsoidal_height_m
@@ -228,6 +237,15 @@ class TelemetryParser:
             gps_week = mrk.gps_week
             gps_time_sec = mrk.gps_time_sec
             ant_offset = (mrk.offset_north_mm, mrk.offset_east_mm, mrk.offset_vert_mm)
+
+            # Anti-spoofing check: Compare embedded EXIF/XMP GNSS with external MRK RTK coordinates
+            if exif_lat is not None and exif_lon is not None:
+                telemetry_discrepancy_m = round(
+                    haversine_distance_m(exif_lat, exif_lon, mrk_lat, mrk_lon), 2
+                )
+                # Genuine flights have discrepancy < 2-5m. > 50m indicates metadata spoofing/swap
+                if telemetry_discrepancy_m > 50.0:
+                    is_telemetry_consistent = False
         else:
             rtk_status = rtk_status_str or ("RTK" if rtk_flag == 16 else "STANDARD_GPS")
 
@@ -269,4 +287,10 @@ class TelemetryParser:
             gps_week=gps_week,
             gps_time_sec=gps_time_sec,
             antenna_offset_mm=ant_offset,
+            exif_latitude=exif_lat,
+            exif_longitude=exif_lon,
+            mrk_latitude=mrk_lat,
+            mrk_longitude=mrk_lon,
+            telemetry_discrepancy_m=telemetry_discrepancy_m,
+            is_telemetry_consistent=is_telemetry_consistent,
         )

@@ -120,6 +120,22 @@ class CVPipeline:
             is_berdsk_case=is_berdsk,
         )
 
+        # Check telemetry anti-spoofing (EXIF vs MRK consistency)
+        inconsistent_shots = [
+            m for m in shots_meta
+            if not getattr(m, "is_telemetry_consistent", True)
+            and getattr(m, "telemetry_discrepancy_m", None) is not None
+        ]
+        if inconsistent_shots:
+            fraud_flag = True
+            max_disc = max(m.telemetry_discrepancy_m for m in inconsistent_shots)
+            disc_km = max_disc / 1000.0
+            fraud_reasons.append(
+                f"Фальсификация телеметрии (Metadata Spoofing): расхождение между встроенным EXIF "
+                f"снимков и внешним MRK-логом составляет {disc_km:.2f} км ({max_disc:.1f}м > 50м). "
+                f"Выявлена попытка подмены геоданных (склейка чужих фотографий с навигационным логом)!"
+            )
+
         # Add geofence warning to fraud reasons if coordinates violate parcel
         if not geocheck.is_geofence_valid:
             fraud_flag = True

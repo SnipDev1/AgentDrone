@@ -288,3 +288,43 @@ def test_multispectral_ndvi_analysis(tmp_path: Path):
     assert res.construction_soil_pct >= 40.0
     assert res.vegetation_pct >= 40.0
     assert len(res.bands_available) >= 2
+
+
+def test_boundary_overlay_with_real_polygon():
+    """Verify official multi-point parcel polygon from CadastralRegistry."""
+    from PIL import Image
+    from src.cv.boundary_overlay import BoundaryOverlay
+    from src.ingestion.cadastral_registry import CadastralRegistry
+    from src.models.schemas import DroneImageMeta, ShotAngleType
+
+    # Check parcel with 5-point polygon (e.g. 54:07:055001:178)
+    p178 = CadastralRegistry.get_parcel("54:07:055001:178")
+    assert p178 is not None
+    assert len(p178.polygon) >= 4
+
+    corners = BoundaryOverlay.calculate_ground_polygon(p178)
+    assert len(corners) >= 4
+    for lat, lon in corners:
+        assert 54.0 < lat < 56.0
+        assert 82.0 < lon < 84.0
+
+    # Check supermarket parcel with 11-point polygon (54:32:010870:8)
+    p_berdsk = CadastralRegistry.get_parcel("54:32:010870:8")
+    assert p_berdsk is not None
+    assert len(p_berdsk.polygon) >= 10
+
+    # Project onto image
+    meta = DroneImageMeta(
+        filename="DJI_0002.JPG",
+        file_path="mock/path.jpg",
+        latitude=54.815546,
+        longitude=83.240718,
+        altitude_rel_m=35.0,
+        gimbal_pitch_deg=-90.0,
+        gimbal_yaw_deg=77.0,
+        shot_angle=ShotAngleType.NADIR_HIGH,
+    )
+    img = Image.new("RGB", (1200, 800), color=(120, 150, 120))
+    overlaid = BoundaryOverlay.apply_boundary_overlay(img, meta, p178)
+    assert overlaid.size == (1200, 800)
+    assert overlaid.mode == "RGB"

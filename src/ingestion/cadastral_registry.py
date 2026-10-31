@@ -7,8 +7,10 @@ standard Russian cadastral format (AA:BB:CCCCCCC:DD).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def normalize_cadastral_id(folder_or_cadastral: str) -> str:
@@ -48,6 +50,7 @@ class CadastralParcel:
     cadastral_value_rub: float = 0.0
     district_name: str = "Новосибирский район"
     notes: str = ""
+    polygon: list[tuple[float, float]] = field(default_factory=list)
 
 
 class CadastralRegistry:
@@ -217,9 +220,50 @@ class CadastralRegistry:
         ),
     }
 
+    _DATABASE_INITIALIZED: bool = False
+
+    @classmethod
+    def _init_database(cls) -> None:
+        """Enrich parcel records with official cadastral polygons if available."""
+        if cls._DATABASE_INITIALIZED:
+            return
+        cls._DATABASE_INITIALIZED = True
+
+        geom_candidates = [
+            Path("data/parcels_geometry.json"),
+            Path(__file__).resolve().parent.parent.parent / "data" / "parcels_geometry.json",
+        ]
+        geom_path = next((p for p in geom_candidates if p.exists()), None)
+        if not geom_path:
+            return
+
+        try:
+            with open(geom_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for cad_id, record in data.items():
+                norm_id = normalize_cadastral_id(cad_id)
+                poly_raw = record.get("polygon", [])
+                poly_tuples = [(float(pt[0]), float(pt[1])) for pt in poly_raw]
+
+                if norm_id in cls._DATABASE:
+                    p = cls._DATABASE[norm_id]
+                    p.polygon = poly_tuples
+                    if record.get("centroid_lat") and record.get("centroid_lon"):
+                        p.centroid_lat = float(record["centroid_lat"])
+                        p.centroid_lon = float(record["centroid_lon"])
+                    if record.get("area_sqm"):
+                        p.area_sqm = float(record["area_sqm"])
+                    if record.get("cadastral_value_rub"):
+                        p.cadastral_value_rub = float(record["cadastral_value_rub"])
+                    if record.get("address") and not p.address:
+                        p.address = record["address"]
+        except Exception:
+            pass
+
     @classmethod
     def get_parcel(cls, identifier: str) -> CadastralParcel | None:
         """Find a parcel by cadastral ID or raw folder name."""
+        cls._init_database()
         norm_id = normalize_cadastral_id(identifier)
         if norm_id in cls._DATABASE:
             return cls._DATABASE[norm_id]
@@ -235,4 +279,5 @@ class CadastralRegistry:
     @classmethod
     def list_all_parcels(cls) -> list[CadastralParcel]:
         """Return all registered cadastral parcels."""
+        cls._init_database()
         return list(cls._DATABASE.values())

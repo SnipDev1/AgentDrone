@@ -61,6 +61,13 @@ class DroneImageMeta(BaseModel):
     gps_week: int | None = None
     gps_time_sec: float | None = None
     antenna_offset_mm: tuple[float, float, float] | None = None
+    # Anti-spoofing and telemetry consistency fields
+    exif_latitude: float | None = None
+    exif_longitude: float | None = None
+    mrk_latitude: float | None = None
+    mrk_longitude: float | None = None
+    telemetry_discrepancy_m: float | None = None
+    is_telemetry_consistent: bool = True
 
 
 class PPKTelemetrySummary(BaseModel):
