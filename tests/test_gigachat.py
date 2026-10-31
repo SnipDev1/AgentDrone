@@ -77,7 +77,7 @@ def test_build_inspector_prompt(sample_credit, sample_inspection):
 
 def test_offline_fallback_all_strategies(sample_credit, sample_inspection):
     """Verify offline fallback generates non-empty, strategy-specific legal text."""
-    service = GigaChatInspectorService(credentials=None)
+    service = GigaChatInspectorService(credentials="")
     assert service.is_online is False
 
     for strat in BankStrategy:
@@ -139,3 +139,79 @@ def test_graceful_fallback_on_api_exception(sample_credit, sample_inspection):
     # Shouldn't raise, returns offline summary
     assert "ЗАКЛЮЧЕНИЕ ИНСПЕКТОРА" in result
     assert "Автоматически согласован очередной транш" in result
+
+
+def test_cv_schemas_compatibility_with_gigachat():
+    """Verify GigaChat service processes CVInspectionResult and UI schemas seamlessly."""
+    from src.models.schemas import (
+        CVInspectionResult,
+        CadastralGeoCheck,
+        CreditObject as CVCreditObject,
+        StrategyRecommendation as CVStrategyRecommendation,
+        StrategyType,
+        StructuralElements,
+        WallMaterial as CVWallMaterial,
+    )
+
+    cv_res = CVInspectionResult(
+        cadastral_id="5419163001521",
+        readiness_pct=52.5,
+        readiness_stage=50,
+        stage_title="Коробка здания",
+        structural_elements=StructuralElements(has_foundation=True, has_walls=True),
+        detected_material=CVWallMaterial.GAS_CONCRETE,
+        geocheck=CadastralGeoCheck(
+            cadastral_id="5419163001521",
+            drone_center_lat=54.834,
+            drone_center_lon=82.784,
+            is_correct_plot=True,
+        ),
+        fraud_risk_flag=False,
+    )
+
+    credit = CVCreditObject(
+        cadastral_id="5419163001521",
+        borrower_name="Васильев Игорь Павлович",
+        credit_agreement_number="CR-2026-521",
+        credit_amount_rub=6500000.0,
+        planned_completion_date="2027-03-31",
+        declared_wall_material="Газобетон/Блок",
+        days_overdue=0,
+    )
+
+    decision = CVStrategyRecommendation(
+        strategy=StrategyType.APPROVE_TRANCHE,
+        strategy_code="STRAT-01",
+        title="Выдача очередного транша",
+        risk_level="LOW",
+        action_required="Выдать транш №2",
+        reasoning=["Стройка в графике"],
+        financial_impact_rub=2000000.0,
+        kalita_status="APPROVED_TRANCHE",
+    )
+
+    service = GigaChatInspectorService(credentials="")
+    summary = service.generate_summary_for_ui(cv_res, credit, decision)
+
+    assert "5419163001521" in summary
+    assert "ЗАКЛЮЧЕНИЕ ИНСПЕКТОРА" in summary
+    assert len(summary) > 50
+
+    status = service.get_mode_status()
+    assert status["is_online"] is False
+    assert "Оффлайн" in status["mode"]
+
+
+def test_live_gigachat_api_if_configured():
+    """Verify live API call if GIGACHAT_CREDENTIALS is configured in .env."""
+    import os
+    if not os.getenv("GIGACHAT_CREDENTIALS"):
+        pytest.skip("GIGACHAT_CREDENTIALS not set, skipping live API test")
+
+    service = GigaChatInspectorService()
+    if not service.is_online:
+        pytest.skip("Could not establish live connection to GigaChat API")
+
+    status = service.get_mode_status()
+    assert status["is_online"] is True
+    assert "Онлайн" in status["mode"]
