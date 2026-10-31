@@ -128,7 +128,7 @@ from src.ui.sber_theme import (  # noqa: E402
 )
 
 st.set_page_config(
-    page_title="АС Калита — Мониторинг залогов ИЖС",
+    page_title="AgentDrone — Мониторинг залогов ИЖС",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -427,6 +427,271 @@ def render_cached_boundary_overlay(
         return buf.getvalue()
 
 
+@st.cache_data(show_spinner=False)
+def load_cached_raw_image_bytes(img_path_str: str) -> bytes:
+    """Load and cache raw drone image resized for fast web viewing."""
+    with Image.open(img_path_str) as raw_img:
+        raw_img.thumbnail((1600, 1200))
+        buf = io.BytesIO()
+        raw_img.save(buf, format="JPEG", quality=88)
+        return buf.getvalue()
+
+
+def render_zoomable_viewer_html(img_bytes: bytes, height: int = 560) -> str:
+    """Generate HTML/JS interactive pan and mouse wheel zoom container."""
+    b64 = base64.b64encode(img_bytes).decode("ascii")
+    data_uri = f"data:image/jpeg;base64,{b64}"
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body, html {{
+    width: 100%; height: {height}px; overflow: hidden;
+    background: #F4F7F5;
+    font-family: 'SB Sans Text', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }}
+  #viewport {{
+    position: relative;
+    width: 100%;
+    height: {height}px;
+    overflow: hidden;
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    border-radius: 12px;
+    border: 1px solid rgba(33, 160, 56, 0.28);
+    background-color: #F8FAF8;
+    background-image: radial-gradient(rgba(33, 160, 56, 0.16) 1.2px, transparent 1.2px);
+    background-size: 20px 20px;
+    box-shadow: inset 0 2px 8px rgba(14, 116, 37, 0.04);
+  }}
+  #viewport:active {{ cursor: grabbing; }}
+  #img-container {{
+    transform-origin: 0 0;
+    transition: transform 0.04s ease-out;
+    position: absolute;
+    top: 0;
+    left: 0;
+    will-change: transform;
+  }}
+  #target-img {{
+    display: block;
+    max-width: none;
+    pointer-events: none;
+    border-radius: 6px;
+    border: 1px solid rgba(33, 160, 56, 0.2);
+    box-shadow: 0 8px 24px rgba(14, 116, 37, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+  }}
+  .controls-bar {{
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(33, 160, 56, 0.35);
+    border-radius: 9px;
+    padding: 4px 6px;
+    z-index: 100;
+    box-shadow: 0 4px 14px rgba(14, 116, 37, 0.1);
+  }}
+  .ctrl-btn {{
+    background: #EBF8EE;
+    border: 1px solid rgba(33, 160, 56, 0.35);
+    color: #0E7425;
+    border-radius: 6px;
+    min-width: 28px;
+    height: 28px;
+    font-size: 15px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0 8px;
+    transition: all 0.15s ease;
+  }}
+  .ctrl-btn:hover {{
+    background: #21A038;
+    color: #FFFFFF;
+    border-color: #21A038;
+    box-shadow: 0 2px 8px rgba(33, 160, 56, 0.25);
+  }}
+  .ctrl-btn:active {{
+    background: #0E7425;
+    border-color: #0E7425;
+  }}
+  .zoom-label {{
+    color: #0E7425;
+    background: #EBF8EE;
+    border: 1px solid rgba(33, 160, 56, 0.25);
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 700;
+    min-width: 48px;
+    text-align: center;
+    padding: 3px 6px;
+    font-variant-numeric: tabular-nums;
+  }}
+  .hint-bar {{
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(33, 160, 56, 0.25);
+    border-radius: 8px;
+    padding: 5px 12px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 500;
+    z-index: 100;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 2px 8px rgba(14, 116, 37, 0.06);
+  }}
+  .hint-bar b {{
+    color: #0E7425;
+    font-weight: 600;
+  }}
+    font-weight: 600;
+  }}
+</style>
+</head>
+<body>
+<div id="viewport">
+  <div id="img-container">
+    <img id="target-img" src="{data_uri}" alt="Drone shot inspection"/>
+  </div>
+  <div class="controls-bar">
+    <button class="ctrl-btn" id="btn-zoom-in" title="Приблизить (или колесико мыши вверх)">+</button>
+    <button class="ctrl-btn" id="btn-zoom-out" title="Отдалить (или колесико мыши вниз)">&minus;</button>
+    <button class="ctrl-btn" id="btn-reset" title="Сбросить масштаб (двойной клик)">Сброс</button>
+    <div class="zoom-label" id="zoom-text">100%</div>
+  </div>
+  <div class="hint-bar">
+    <span><b>Колесико мыши:</b> зум</span> &bull; <span><b>ЛКМ:</b> перемещение</span> &bull; <span><b>2x клик:</b> сброс</span>
+  </div>
+</div>
+<script>
+(function() {{
+  const viewport = document.getElementById('viewport');
+  const container = document.getElementById('img-container');
+  const img = document.getElementById('target-img');
+  const zoomText = document.getElementById('zoom-text');
+  const btnIn = document.getElementById('btn-zoom-in');
+  const btnOut = document.getElementById('btn-zoom-out');
+  const btnReset = document.getElementById('btn-reset');
+
+  let scale = 1.0;
+  let baseScale = 1.0;
+  let pointX = 0;
+  let pointY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const minScale = 0.2;
+  const maxScale = 10.0;
+
+  function updateTransform() {{
+    container.style.transform = `translate(${{pointX}}px, ${{pointY}}px) scale(${{scale}})`;
+    const relativePercent = Math.round((scale / baseScale) * 100);
+    zoomText.textContent = relativePercent + '%';
+  }}
+
+  function fitToViewport() {{
+    const vw = viewport.clientWidth || 800;
+    const vh = viewport.clientHeight || 560;
+    const iw = img.naturalWidth || img.width || 800;
+    const ih = img.naturalHeight || img.height || 600;
+
+    const margin = 12;
+    const scaleFit = Math.min((vw - margin * 2) / iw, (vh - margin * 2) / ih, 1.0);
+    scale = Math.max(scaleFit, 0.1);
+    baseScale = scale;
+    pointX = (vw - iw * scale) / 2;
+    pointY = (vh - ih * scale) / 2;
+    updateTransform();
+  }}
+
+  img.onload = fitToViewport;
+  if (img.complete) fitToViewport();
+
+  viewport.addEventListener('wheel', function(e) {{
+    e.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+    const newScale = Math.min(Math.max(scale * factor, minScale), maxScale);
+    if (newScale === scale) return;
+
+    pointX = mouseX - (mouseX - pointX) * (newScale / scale);
+    pointY = mouseY - (mouseY - pointY) * (newScale / scale);
+    scale = newScale;
+    updateTransform();
+  }}, {{ passive: false }});
+
+  viewport.addEventListener('mousedown', function(e) {{
+    if (e.button !== 0 || e.target.closest('.controls-bar')) return;
+    e.preventDefault();
+    isDragging = true;
+    startX = e.clientX - pointX;
+    startY = e.clientY - pointY;
+  }});
+
+  window.addEventListener('mousemove', function(e) {{
+    if (!isDragging) return;
+    pointX = e.clientX - startX;
+    pointY = e.clientY - startY;
+    updateTransform();
+  }});
+
+  window.addEventListener('mouseup', function() {{
+    isDragging = false;
+  }});
+
+  viewport.addEventListener('dblclick', function(e) {{
+    if (e.target.closest('.controls-bar')) return;
+    fitToViewport();
+  }});
+
+  btnIn.addEventListener('click', function() {{
+    const cx = viewport.clientWidth / 2;
+    const cy = viewport.clientHeight / 2;
+    const newScale = Math.min(scale * 1.25, maxScale);
+    pointX = cx - (cx - pointX) * (newScale / scale);
+    pointY = cy - (cy - pointY) * (newScale / scale);
+    scale = newScale;
+    updateTransform();
+  }});
+
+  btnOut.addEventListener('click', function() {{
+    const cx = viewport.clientWidth / 2;
+    const cy = viewport.clientHeight / 2;
+    const newScale = Math.max(scale / 1.25, minScale);
+    pointX = cx - (cx - pointX) * (newScale / scale);
+    pointY = cy - (cy - pointY) * (newScale / scale);
+    scale = newScale;
+    updateTransform();
+  }});
+
+  btnReset.addEventListener('click', fitToViewport);
+  window.addEventListener('resize', fitToViewport);
+}})();
+</script>
+</body>
+</html>"""
+
+
 def get_base64_image(
     img_path: Path,
     apply_overlay: bool = False,
@@ -574,6 +839,14 @@ def main() -> None:
             st.session_state["selected_plot_id"] = pending_id
         elif pending_id is None and "selected_plot_id" in st.session_state:
             del st.session_state["selected_plot_id"]
+
+    if "pending_view_mode" in st.session_state:
+        target_pid, mode = st.session_state.pop("pending_view_mode")
+        st.session_state[f"view_mode_{target_pid}"] = mode
+
+    if "pending_shot_idx" in st.session_state:
+        target_pid, s_idx = st.session_state.pop("pending_shot_idx")
+        st.session_state[f"shot_idx_{target_pid}"] = s_idx
 
     if "inspected_plots" not in st.session_state:
         st.session_state["inspected_plots"] = {}
@@ -844,12 +1117,22 @@ def main() -> None:
                         )
                         return f"Кадр {idx + 1} из {len(paired_shots)} — {angle_str} ({p_img.name} {pitch_str})"
 
-                    sel_idx = st.selectbox(
-                        "Выберите кадр для инспекции:",
-                        options=shot_options,
-                        format_func=_fmt_shot,
-                        key=f"shot_idx_{selected_plot_id}",
-                    )
+                    col_shot_sel, col_zoom_toggle = st.columns([2.8, 1.2])
+                    with col_shot_sel:
+                        sel_idx = st.selectbox(
+                            "Выберите кадр для инспекции:",
+                            options=shot_options,
+                            format_func=_fmt_shot,
+                            key=f"shot_idx_{selected_plot_id}",
+                        )
+                    with col_zoom_toggle:
+                        zoom_enabled = st.checkbox(
+                            "🔍 Зум на колесико",
+                            value=True,
+                            key=f"wheel_zoom_{selected_plot_id}",
+                            help="Включает интерактивное масштабирование колесиком мыши и панорамирование",
+                        )
+
                     img_path, meta = paired_shots[sel_idx]
 
                     if show_boundary:
@@ -861,9 +1144,13 @@ def main() -> None:
                             boundary_width,
                             show_setback=show_setback,
                         )
-                        st.image(img_bytes, use_container_width=True)
                     else:
-                        st.image(str(img_path), use_container_width=True)
+                        img_bytes = load_cached_raw_image_bytes(str(img_path))
+
+                    if zoom_enabled:
+                        components.html(render_zoomable_viewer_html(img_bytes, height=560), height=575)
+                    else:
+                        st.image(img_bytes, use_container_width=True)
 
                     if meta:
                         rtk_txt = f"RTK {meta.rtk_status}" if meta.rtk_status else "GNSS EXIF"
@@ -893,6 +1180,20 @@ def main() -> None:
                                 st.image(img_bytes, use_container_width=True)
                             else:
                                 st.image(str(img_path), use_container_width=True)
+                            if st.button(
+                                f"🔍 Инспектировать кадр {idx + 1} с зумом",
+                                key=f"grid_zoom_{selected_plot_id}_{idx}",
+                                use_container_width=True,
+                            ):
+                                st.session_state["pending_view_mode"] = (
+                                    selected_plot_id,
+                                    "Детальный просмотр выбранного кадра",
+                                )
+                                st.session_state["pending_shot_idx"] = (
+                                    selected_plot_id,
+                                    idx,
+                                )
+                                st.rerun()
             else:
                 st.warning("В папке участка отсутствуют изображения .JPG")
 
@@ -1187,62 +1488,19 @@ def main() -> None:
     # TAB 4: USER PARCEL UPLOAD, DELETION & PORTFOLIO REGISTRY
     # =========================================================================
     with tab_registry:
-        u_col1, u_col2 = st.columns(2, gap="medium")
-        with u_col1:
-            _render_html(
-                """
-                <div class="ws-panel" style="margin-bottom:8px;">
-                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
-                        <span>Добавить новый дом / участок (Файлы БПЛА + Кадастровый номер)</span>
-                    </div>
-                </div>
-                """
+        t_col1, t_col2 = st.columns([3.2, 1.3])
+        with t_col1:
+            st.caption(
+                "Управление объектами залогового портфеля. "
+                "Загрузка новых снимков и ZIP-архивов доступна в боковом меню слева."
             )
-            form_cad = st.text_input(
-                "Кадастровый номер земельного участка:",
-                placeholder="Например: 54:19:164603:3847",
-                key="main_upload_cad",
-            )
-            form_files = st.file_uploader(
-                "Выберите снимки с дрона (.JPG) и навигационный файл (.MRK):",
-                type=["jpg", "jpeg", "tif", "tiff", "mrk", "obs", "nav", "txt"],
-                accept_multiple_files=True,
-                key="main_upload_files",
-            )
-            if st.button("Загрузить участок и запросить данные Росреестра", type="primary"):
-                handle_upload_files(form_cad, form_files)
-
-        with u_col2:
-            _render_html(
-                """
-                <div class="ws-panel" style="margin-bottom:8px;">
-                    <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
-                        <span>Пакетная загрузка ZIP-архива и управление реестром</span>
-                    </div>
-                </div>
-                """
-            )
-            form_zip_cad = st.text_input(
-                "Целевой кадастровый номер (для плоского архива):",
-                placeholder="Необязательно, если папки названы по кадастру",
-                key="main_zip_cad",
-            )
-            form_zip = st.file_uploader(
-                "Выберите ZIP-архив:",
-                type=["zip"],
-                key="main_zip_file",
-            )
-            b_col1, b_col2 = st.columns(2)
-            with b_col1:
-                if st.button("Загрузить ZIP-архив", type="primary", use_container_width=True):
-                    handle_upload_zip(form_zip, target_plot_id=form_zip_cad)
-            with b_col2:
-                if st.button("Проверить все участки пакетно", use_container_width=True):
-                    with st.spinner("Пакетный расчет всех участков..."):
-                        for pid in plot_ids:
-                            if pid not in st.session_state["inspected_plots"]:
-                                st.session_state["inspected_plots"][pid] = analyze_single_plot(pid)
-                    st.rerun()
+        with t_col2:
+            if st.button("⚡ Проверить все участки пакетно", type="primary", use_container_width=True):
+                with st.spinner("Пакетный расчет всех участков..."):
+                    for pid in plot_ids:
+                        if pid not in st.session_state["inspected_plots"]:
+                            st.session_state["inspected_plots"][pid] = analyze_single_plot(pid)
+                st.rerun()
 
         # Table of all plots on the server with direct Delete / Inspect buttons
         portfolio_data = get_portfolio_summary(plot_ids, st.session_state["inspected_plots"])

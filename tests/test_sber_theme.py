@@ -35,10 +35,10 @@ class TestSberTheme(unittest.TestCase):
     def test_render_sber_header(self):
         header = render_sber_header(active_objects_count=13, rtk_status="FIX Q=16")
         self.assertIn("sber-top-navbar", header)
-        self.assertIn("Центр мониторинга залогов ИЖС", header)
-        self.assertIn("DJI RTK FIX Q=16", header)
-        self.assertIn("АС «Калита»", header)
-        self.assertIn("Роль #3", header)
+        self.assertIn("AgentDrone", header)
+        self.assertIn("Объектов: 13", header)
+        self.assertNotIn("DJI RTK FIX Q=16", header)
+        self.assertNotIn("АС «Калита» Онлайн", header)
 
     def test_render_kpi_card(self):
         card = render_kpi_card(

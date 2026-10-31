@@ -503,7 +503,7 @@ def render_sber_header(
     giga_status: str = "GigaChat-2-Pro",
     giga_online: bool = False,
 ) -> str:
-    """Генерирует HTML-шапку в фирменном стиле sberbank.ru без отступов Markdown."""
+    """Генерирует HTML-шапку платформы AgentDrone без отступов Markdown."""
     giga_bg = (
         "background:#EAF8ED; color:#0E7425; border: 1px solid rgba(33, 160, 56, 0.25);"
         if giga_online
@@ -515,23 +515,16 @@ def render_sber_header(
         f'{SBER_LOGO_SVG}'
         '<div class="sber-brand-divider"></div>'
         '<div>'
-        '<h1 class="sber-service-title">Центр мониторинга залогов ИЖС</h1>'
-        '<p class="sber-service-subtitle">Сибирский банк ПАО Сбербанк • Инспекция БПЛА &amp; АС «Калита»</p>'
+        '<h1 class="sber-service-title">AgentDrone</h1>'
+        '<p class="sber-service-subtitle">Платформа мониторинга и аудита залогов ИЖС по данным БПЛА</p>'
         '</div>'
         '</div>'
         '<div class="sber-telemetry-pills">'
-        '<div class="sber-pill-status active">'
-        '<span class="sber-pulse-dot"></span>'
-        f'<span>DJI RTK {rtk_status}</span>'
-        '</div>'
         f'<div class="sber-pill-status" style="{giga_bg}">'
         f'<span>{giga_status}</span>'
         '</div>'
-        '<div class="sber-pill-status">'
-        '<span>АС «Калита» Онлайн</span>'
-        '</div>'
         '<div class="sber-pill-status" style="background:#EBF5FF; color:#1D4ED8;">'
-        f'<span>Роль #3 • Объектов: {active_objects_count}</span>'
+        f'<span>Объектов: {active_objects_count}</span>'
         '</div>'
         '</div>'
         '</div>'
