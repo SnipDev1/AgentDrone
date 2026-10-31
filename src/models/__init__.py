@@ -7,6 +7,8 @@ from .schemas import (
     CVInspectionResult,
     DroneImageMeta,
     ShotAngleType,
+    StrategyRecommendation,
+    StrategyType,
     StructuralElements,
     WallMaterial,
 )
@@ -18,6 +20,8 @@ __all__ = [
     "CreditObject",
     "DroneImageMeta",
     "ShotAngleType",
+    "StrategyRecommendation",
+    "StrategyType",
     "StructuralElements",
     "WallMaterial",
 ]

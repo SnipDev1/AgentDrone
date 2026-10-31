@@ -106,7 +106,10 @@ def test_real_dataset_plot_ingestion():
 
 def test_cadastral_registry_and_normalization():
     """Verify folder name normalization and registry parcel lookup."""
-    from src.ingestion.cadastral_registry import CadastralRegistry, normalize_cadastral_id
+    from src.ingestion.cadastral_registry import (
+        CadastralRegistry,
+        normalize_cadastral_id,
+    )
 
     # Test folder name formatting
     assert normalize_cadastral_id("5407055001178") == "54:07:055001:178"
