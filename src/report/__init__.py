@@ -4,9 +4,10 @@ Provides the official Collateral Inspection Act (Приложение 1) templat
 """
 
 from .generator import ActGenerator
-from .builder import build_act_report_data
+from .builder import build_act_report_data, build_act_from_cv
 
 __all__ = [
     "ActGenerator",
     "build_act_report_data",
+    "build_act_from_cv",
 ]
