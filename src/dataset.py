@@ -6,11 +6,14 @@ and PPK telemetry data across team environments.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
+import sys
+from typing import BinaryIO
 
 from .config import find_dataset_root
+from .dataset_manager import ParcelManager
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -81,8 +84,8 @@ class DroneDataset:
         plots = []
         for d in self.root_dir.iterdir():
             if d.is_dir() and not d.name.startswith('.'):
-                # Cadastral IDs are numeric identifiers
-                if d.name.isdigit() and len(d.name) >= 10:
+                clean_digits = re.sub(r"[^\d]", "", d.name)
+                if (d.name.isdigit() and len(d.name) >= 10) or (len(clean_digits) >= 10) or any(d.glob("*.JPG")):
                     plots.append(d.name)
         return sorted(plots)
 
@@ -135,6 +138,30 @@ class DroneDataset:
     def get_all_plots(self) -> dict[str, PlotData]:
         """Retrieve data for all plots as a dictionary mapping plot_id -> PlotData."""
         return {pid: self.get_plot(pid) for pid in self.list_plots()}
+
+    def delete_plot(self, plot_id: str) -> bool:
+        """Safely delete a parcel folder from this dataset root."""
+        return ParcelManager.delete_plot(plot_id, dataset_root=self.root_dir)
+
+    def upload_zip(
+        self,
+        zip_source: bytes | BinaryIO | Path | str,
+        target_plot_id: str | None = None,
+    ) -> list[str]:
+        """Extract a parcel archive (.zip) into this dataset root."""
+        return ParcelManager.upload_zip(zip_source, target_plot_id=target_plot_id, dataset_root=self.root_dir)
+
+    def upload_files(
+        self,
+        plot_id: str,
+        files: list[tuple[str, bytes]],
+    ) -> str:
+        """Save a list of (filename, file_bytes) into this dataset root under plot_id."""
+        return ParcelManager.upload_files(plot_id, files, dataset_root=self.root_dir)
+
+    def get_plot_stats(self, plot_id: str) -> dict:
+        """Retrieve file metrics and storage stats for a parcel folder."""
+        return ParcelManager.get_plot_stats(plot_id, dataset_root=self.root_dir)
 
     def validate(self) -> dict:
         """Perform validation and return comprehensive report."""

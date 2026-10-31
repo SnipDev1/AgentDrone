@@ -31,7 +31,7 @@ echo [%time:~0,8%] Syncing project files to %REMOTE_HOST%:%REMOTE_PORT%...
 
 set TEMP_ARCHIVE=%TEMP%\agentdrone_sync_%RANDOM%.tar.gz
 
-tar --exclude=.git --exclude=dataset --exclude=data --exclude=downloads --exclude=keys --exclude=__pycache__ --exclude=.pytest_cache --exclude=.ruff_cache --exclude=.venv --exclude=venv --exclude=*.tar.gz --exclude=*.part -czf "%TEMP_ARCHIVE%" .
+tar --exclude=.git --exclude=dataset --exclude=data/samples --exclude=downloads --exclude=keys --exclude=__pycache__ --exclude=.pytest_cache --exclude=.ruff_cache --exclude=.venv --exclude=venv --exclude=*.tar.gz --exclude=*.part -czf "%TEMP_ARCHIVE%" .
 
 if not exist "%TEMP_ARCHIVE%" (
     echo [ERROR] Failed to create sync archive.
