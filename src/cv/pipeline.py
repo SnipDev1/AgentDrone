@@ -66,9 +66,22 @@ class CVPipeline:
             drone_jpgs = raw_jpgs
 
         shots_meta: list[DroneImageMeta] = []
+        flight_date: str | None = None
         for img_path in drone_jpgs:
             meta = TelemetryParser.parse_image_metadata(img_path, mrk_records=mrk_records)
             shots_meta.append(meta)
+            if not flight_date and meta.timestamp:
+                try:
+                    # e.g. "2027:08:07 14:30:00" -> "2027-08-07"
+                    clean_ts = meta.timestamp.strip().split()[0].replace(":", "-")
+                    if len(clean_ts) == 10 and clean_ts[4] == "-" and clean_ts[7] == "-":
+                        flight_date = clean_ts
+                except Exception:
+                    pass
+
+        if not flight_date and drone_jpgs:
+            from ..engine.dynamics_analyzer import extract_date_from_image
+            flight_date = extract_date_from_image(drone_jpgs[0])
 
         # 3. Angle Completeness & Cadastral Geocheck
         completeness = AngleCompletenessDetector.evaluate(shots_meta)
@@ -193,4 +206,5 @@ class CVPipeline:
             ppk_summary=ppk_summary,
             multispectral=multispectral,
             operator_notes=operator_notes,
+            inspection_date=flight_date,
         )

@@ -117,6 +117,22 @@
       border-left: 5px solid #dc2626;
       background: #fef2f2;
     }
+    .summary-box h3, .summary-box h4 {
+      margin: 10px 0 4px 0;
+      color: #0f172a;
+      font-size: 10.5pt;
+      font-weight: 700;
+    }
+    .summary-box p {
+      margin: 4px 0;
+    }
+    .summary-box ul {
+      margin: 4px 0 6px 18px;
+      padding: 0;
+    }
+    .summary-box li {
+      margin-bottom: 3px;
+    }
 
     .photo-grid {
       display: grid;
@@ -187,7 +203,7 @@
     <div class="doc-meta">
       <strong>Приложение № 1</strong><br>
       к Регламенту мониторинга обеспечения ИЖС<br>
-      Система учета: АС «Калита»
+      Система учета: АС «Залоги» (Сбербанк)
     </div>
   </div>
 
@@ -429,10 +445,14 @@
     </tr>
   </table>
 
-  <!-- ЭКСПЕРТНОЕ РЕЗЮМЕ ДЛЯ АС КАЛИТА -->
+  <!-- ЭКСПЕРТНОЕ ЗАКЛЮЧЕНИЕ ИИ-АГЕНТА GIGACHAT -->
   <div class="summary-box {% if data.recommendation.risk_level.name in ['HIGH', 'CRITICAL'] %}risk{% else %}highlight{% endif %}">
-    <strong>Резюме для загрузки в карточку объекта АС «Калита»:</strong><br>
-    {{ data.recommendation.summary }}
+    <div style="font-weight: 700; color: #166534; font-size: 10.5pt; margin-bottom: 6px;">
+      Экспертный строительный аудит и анализ динамики (ИИ-агент GigaChat Сбербанк):
+    </div>
+    <div class="summary-text" style="line-height: 1.55;">
+      {{ data.recommendation.summary | safe }}
+    </div>
   </div>
 
   <div style="font-size: 9.5pt; margin-top: 8px;">
@@ -467,7 +487,7 @@
     </div>
     <div class="sig-col" style="text-align: right;">
       <div class="stamp-box">
-        ЭЛЕКТРОННО ПОДПИСАНО В АС «КАЛИТА»<br>
+        ЭЛЕКТРОННО ПОДПИСАНО В СИСТЕМЕ МОНИТОРИНГА ЗАЛОГОВ СБЕРБАНКА<br>
         Сертификат: ПАО СБЕРБАНК ИЖС-БПЛА-2026<br>
         Дата и время фиксации: {{ data.act_date.strftime('%d.%m.%Y') }} 12:00 UTC+7
       </div>

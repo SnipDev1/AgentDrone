@@ -1,6 +1,6 @@
 """GigaChat service module for AgentDrone.
 
-Provides AI inspector summary generation and offline fallback templates for AS 'Kalita'.
+Provides AI inspector summary generation and offline fallback templates for collateral monitoring.
 """
 
 from .service import GigaChatInspectorService

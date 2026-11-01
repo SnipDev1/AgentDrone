@@ -165,6 +165,16 @@ class CreditRegistry:
         if digits and digits in CREDIT_REGISTRY_DIGITS:
             return CREDIT_REGISTRY_DIGITS[digits]
 
+        # Check prefix before underscore or dash (e.g. '5419160202125_2027' -> '5419160202125')
+        prefix = re.split(r"[_\- ]", raw_clean)[0]
+        if prefix != raw_clean:
+            pref_norm = normalize_cadastral_id(prefix)
+            if pref_norm in CREDIT_REGISTRY_DATA:
+                return CREDIT_REGISTRY_DATA[pref_norm]
+            pref_digits = _digits_only(prefix)
+            if pref_digits and pref_digits in CREDIT_REGISTRY_DIGITS:
+                return CREDIT_REGISTRY_DIGITS[pref_digits]
+
         parcel = CadastralRegistry.get_parcel(norm_id, fetch_online=False)
         addr = parcel.address if parcel and parcel.address else "Н/Д"
         return CreditObject(

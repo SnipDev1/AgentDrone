@@ -1,4 +1,4 @@
-"""Web workspace for Sberbank Collateral Inspector (АС «Калита» / Мониторинг ИЖС).
+"""Web workspace for Sberbank Collateral Inspector (Мониторинг залогов ИЖС / AgentDrone).
 
 Provides a clean, ergonomic corporate banking interface for:
 - Uploading and deleting user drone inspection folders (ZIP or JPG/MRK files)
@@ -101,10 +101,12 @@ if "pytest" not in sys.modules and getattr(sys, "_agentdrone_reloaded_v18", Fals
     sys._agentdrone_reloaded_v18 = True  # type: ignore[attr-defined]
 
 from src.cv.boundary_overlay import BoundaryOverlay  # noqa: E402
+from src.cv.fraud_detector import FraudDetector  # noqa: E402
 from src.cv.pipeline import CVPipeline  # noqa: E402
 from src.dataset import DroneDataset  # noqa: E402
 from src.dataset_manager import ParcelManager  # noqa: E402
 from src.engine.decision_engine import DecisionEngine  # noqa: E402
+from src.engine.dynamics_analyzer import DynamicsAnalyzer, group_images_by_date  # noqa: E402
 from src.gigachat_service.service import GigaChatInspectorService  # noqa: E402
 from src.ingestion.cadastral_registry import (  # noqa: E402
     CadastralParcel,
@@ -117,6 +119,7 @@ from src.models.schemas import (  # noqa: E402
     CVInspectionResult,
     DroneImageMeta,
     StrategyRecommendation,
+    WallMaterial,
 )
 from src.models.strategy import ReportPhotoItem  # noqa: E402
 from src.report.builder import build_act_from_cv  # noqa: E402
@@ -264,7 +267,11 @@ def handle_upload_zip(uploaded_zip, target_plot_id: str | None = None) -> None:
         st.error(f"Ошибка распаковки архива: {exc}")
 
 
-def handle_upload_files(target_plot_id: str, uploaded_files: list) -> None:
+def handle_upload_files(
+    target_plot_id: str,
+    uploaded_files: list,
+    flight_subdir: str | None = None,
+) -> None:
     """Upload individual drone photos / MRK logs into a new or existing parcel folder."""
     if not target_plot_id or not target_plot_id.strip():
         st.error("Пожалуйста, укажите кадастровый номер для создаваемой папки.")
@@ -274,7 +281,11 @@ def handle_upload_files(target_plot_id: str, uploaded_files: list) -> None:
         return
     try:
         file_tuples = [(f.name, f.getvalue()) for f in uploaded_files]
-        saved_id = ParcelManager.upload_files(target_plot_id.strip(), file_tuples)
+        saved_id = ParcelManager.upload_files(
+            target_plot_id.strip(),
+            file_tuples,
+            flight_subdir=flight_subdir,
+        )
         clear_all_caches()
         st.session_state["pending_plot_id"] = saved_id
         st.toast(f"Объект {normalize_cadastral_id(saved_id)} ({len(file_tuples)} файлов) загружен.")
@@ -880,14 +891,26 @@ def main() -> None:
                 cad_str = cred.cadastral_id if cred else normalize_cadastral_id(pid)
                 is_done = pid in st.session_state["inspected_plots"]
                 status_tag = "[Проверен]" if is_done else ""
+                flight_dates = (
+                    ParcelManager.get_plot_flight_dates(pid)
+                    if hasattr(ParcelManager, "get_plot_flight_dates")
+                    else []
+                )
+                date_str = ", ".join(flight_dates) if flight_dates else ""
+                date_tag = f"[{date_str}]" if date_str else ""
                 addr_short = (
-                    cred.address[:28] + "…"
-                    if (cred and len(cred.address) > 28)
+                    cred.address[:24] + "…"
+                    if (cred and len(cred.address) > 24)
                     else (cred.address if cred else "")
                 )
-                plot_labels[pid] = (
-                    f"{cad_str} {('— ' + addr_short) if addr_short else ''} {status_tag}".strip()
-                )
+                parts = [cad_str]
+                if date_tag:
+                    parts.append(date_tag)
+                if addr_short:
+                    parts.append(f"— {addr_short}")
+                if status_tag:
+                    parts.append(status_tag)
+                plot_labels[pid] = " ".join(parts).strip()
 
             selected_plot_id = st.selectbox(
                 "Выберите кадастровый участок:",
@@ -932,8 +955,21 @@ def main() -> None:
                     accept_multiple_files=True,
                     key="sb_files_uploader",
                 )
+                is_subflight = st.checkbox(
+                    "Повторный вылет БПЛА (для анализа динамики)",
+                    value=False,
+                    key="sb_is_subflight",
+                    help="Сохраняет съемку в отдельную подпапку вылета для сравнения этапов строительства",
+                )
+                flight_label = ""
+                if is_subflight:
+                    flight_label = st.text_input(
+                        "Метка или дата вылета (напр. 2026-09-24):",
+                        placeholder="2026-09-24",
+                        key="sb_flight_label",
+                    )
                 if st.button("Загрузить объект на сервер", type="primary", use_container_width=True):
-                    handle_upload_files(new_cad_id, new_files)
+                    handle_upload_files(new_cad_id, new_files, flight_subdir=flight_label or None)
             else:
                 zip_cad_id = st.text_input(
                     "Кадастровый номер (необязательно):",
@@ -969,11 +1005,13 @@ def main() -> None:
                 if gigachat_probe.is_online
                 else "Статус: Автономный режим"
             )
-            gigachat_key = st.text_input(
+            custom_key = st.text_input(
                 "Переопределить ключ GigaChat API:",
                 type="password",
                 help="По умолчанию используется GIGACHAT_CREDENTIALS из .env",
             )
+            if custom_key:
+                gigachat_probe = GigaChatInspectorService(credentials=custom_key)
 
     # Empty state when all plots are deleted by user
     if not selected_plot_id:
@@ -1004,12 +1042,58 @@ def main() -> None:
             decision_result,
         )
 
+    # Apply manual wall material override if configured by inspector
+    if "manual_material_overrides" not in st.session_state:
+        st.session_state["manual_material_overrides"] = {}
+
+    manual_mat = st.session_state["manual_material_overrides"].get(selected_plot_id)
+    if manual_mat is not None and cv_result.detected_material != manual_mat:
+        cv_result.detected_material = manual_mat
+        decl_mat = credit_obj.declared_wall_material if credit_obj else None
+        loan_purpose = credit_obj.loan_purpose if credit_obj else "ИЖС"
+        fraud_risk, fraud_reasons, _ = FraudDetector.analyze_fraud_and_defects(
+            detected_material=cv_result.detected_material,
+            material_confidence=1.0,
+            readiness_stage=cv_result.readiness_stage,
+            readiness_pct=cv_result.readiness_pct,
+            structural_elements=cv_result.structural_elements,
+            features_list=[],
+            declared_material=decl_mat,
+            loan_purpose=loan_purpose,
+        )
+        cv_result.fraud_risk_flag = fraud_risk
+        cv_result.fraud_reasons = fraud_reasons
+        decision_result = DecisionEngine.evaluate(credit_obj, cv_result)
+        st.session_state["inspected_plots"][selected_plot_id] = (
+            cv_result,
+            credit_obj,
+            decision_result,
+        )
+
     ds = DroneDataset()
     plot = ds.get_plot(selected_plot_id)
     parcel = CadastralRegistry.get_parcel(
         selected_plot_id, fetch_online=True, plot_dir=plot.dir_path
     )
-    paired_shots = match_shots_to_metadata(plot.rgb_images, cv_result.shots_metadata)
+
+    # Detect multi-temporal flight dates in plot images
+    date_groups = group_images_by_date(plot.rgb_images)
+    active_flight_date = None
+    if len(date_groups) > 1:
+        date_keys = list(date_groups.keys())
+        default_idx = len(date_keys) - 1
+        fdate_sess_key = f"active_flight_date_{selected_plot_id}"
+        if fdate_sess_key in st.session_state and st.session_state[fdate_sess_key] in date_keys:
+            active_flight_date = st.session_state[fdate_sess_key]
+        else:
+            active_flight_date = date_keys[default_idx]
+            st.session_state[fdate_sess_key] = active_flight_date
+        active_rgb_images = date_groups[active_flight_date]
+    else:
+        active_rgb_images = plot.rgb_images
+        active_flight_date = next(iter(date_groups.keys())) if date_groups else None
+
+    paired_shots = match_shots_to_metadata(active_rgb_images, cv_result.shots_metadata)
 
     # Top KPI Strip (4 strict corporate cards)
     k1, k2, k3, k4 = st.columns(4)
@@ -1025,11 +1109,12 @@ def main() -> None:
             )
         )
     with k2:
+        mat_label = f"{cv_result.detected_material.value}" + (" [Вручную]" if manual_mat is not None else "")
         _render_html(
             render_kpi_card(
                 title="Стадия и готовность (CV)",
                 value=f"{cv_result.readiness_pct}% (Стадия {cv_result.readiness_stage}%)",
-                subtext=f"{cv_result.stage_title} • {cv_result.detected_material.value}",
+                subtext=f"{cv_result.stage_title} • {mat_label}",
                 icon_type="chart",
                 is_success=(cv_result.readiness_stage == 100),
                 is_warning=(cv_result.readiness_stage == 50),
@@ -1064,13 +1149,38 @@ def main() -> None:
             )
         )
 
-    # Workspace Navigation Tabs (4 clean, non-AI functional tabs)
-    tab_photos, tab_geo, tab_act, tab_registry = st.tabs(
+    # Prepare Multi-Temporal Dynamics & Expert AI Agent Audit
+    snapshots = DynamicsAnalyzer.build_snapshots_for_plot(
+        cadastral_id=selected_plot_id,
+        plot_images=plot.rgb_images,
+        current_cv_result=cv_result,
+        include_baseline_if_single=False,
+        credit_obj=credit_obj,
+        plot_id=selected_plot_id,
+    )
+    dynamics = DynamicsAnalyzer.compute_dynamics(
+        cadastral_id=selected_plot_id,
+        snapshots=snapshots,
+        credit_obj=credit_obj,
+    )
+    dyn_cache_key = f"dyn_ai_{selected_plot_id}_{len(snapshots)}_{snapshots[-1].flight_date}"
+    if dyn_cache_key not in st.session_state:
+        with st.spinner("Анализ строительной динамики ИИ-агентом GigaChat..."):
+            st.session_state[dyn_cache_key] = gigachat_probe.analyze_construction_dynamics(
+                dynamics, credit_obj
+            )
+    dynamics.ai_agent_summary = st.session_state[dyn_cache_key]
+    dynamics.ai_agent_is_online = gigachat_probe.is_online
+    expert_dynamics_summary = st.session_state[dyn_cache_key]
+
+    # Workspace Navigation Tabs
+    tab_photos, tab_dynamics, tab_geo, tab_act, tab_registry = st.tabs(
         [
-            f"1. Аэрофотосъемка и границы ЗУ ({len(paired_shots)} кадр.)",
-            "2. Геодезия, PPK и карта Росреестра",
-            "3. Акт проверки залога (Приложение 1)",
-            f"4. Управление объектами ({len(plot_ids)})",
+            f"1. Аэрофотосъемка и детекция ({len(paired_shots)} кадр.)",
+            "2. 📈 Динамика строительства (ИИ-агент)",
+            "3. Геодезия, PPK и карта Росреестра",
+            f"4. Решение Банка и Акт ({decision_result.strategy_code})",
+            f"5. Реестр и портфель залогов ({len(plot_ids)})",
         ]
     )
 
@@ -1091,6 +1201,23 @@ def main() -> None:
                 </div>
                 """
             )
+
+            if len(date_groups) > 1:
+                d_c1, d_c2 = st.columns([1.8, 2.2])
+                with d_c1:
+                    sel_fdate = st.selectbox(
+                        "📅 Дата серии съемки БПЛА:",
+                        options=list(date_groups.keys()),
+                        index=list(date_groups.keys()).index(active_flight_date) if active_flight_date in date_groups else 0,
+                        key=f"fdate_choice_{selected_plot_id}",
+                    )
+                    if sel_fdate != active_flight_date:
+                        st.session_state[f"active_flight_date_{selected_plot_id}"] = sel_fdate
+                        st.rerun()
+                with d_c2:
+                    st.caption(
+                        f"Найдено серий съемки: {len(date_groups)} • Активная дата: **{active_flight_date}** ({len(paired_shots)} кадр.)"
+                    )
 
             if paired_shots:
                 view_mode = st.radio(
@@ -1251,6 +1378,70 @@ def main() -> None:
                 """
             )
 
+            # 1.1 Manual Wall Material Verification & Override
+            mat_options = [
+                "Автоопределение (алгоритм CV)",
+                WallMaterial.BRICK.value,
+                WallMaterial.GAS_CONCRETE.value,
+                WallMaterial.TIMBER.value,
+                WallMaterial.FRAME_PANEL.value,
+                WallMaterial.SANDWICH_PANEL.value,
+                WallMaterial.UNKNOWN.value,
+            ]
+            is_overridden = manual_mat is not None
+            curr_display = manual_mat.value if is_overridden else "Автоопределение (алгоритм CV)"
+            curr_idx = mat_options.index(curr_display) if curr_display in mat_options else 0
+
+            mat_status_badge = (
+                '<span class="ws-status-pill ws-status-ok" style="background:#EBF8EE; color:#0E7425; font-weight:600;">'
+                '✓ Верифицировано инспектором</span>'
+                if is_overridden
+                else f'<span class="ws-status-pill ws-status-neutral">Авто (CV {int(cv_result.material_confidence * 100)}%)</span>'
+            )
+
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Материал несущих стен</span>
+                        <span>{mat_status_badge}</span>
+                    </div>
+                    <div style="font-size:0.86rem; color:#0F172A; margin-bottom:8px;">
+                        Фактический материал строения: <strong>{cv_result.detected_material.value}</strong>
+                    </div>
+                </div>
+                """
+            )
+            col_mat_sel, col_mat_reset = st.columns([2.6, 1.0])
+            with col_mat_sel:
+                chosen_mat_label = st.selectbox(
+                    "Указать материал стен вручную (при ошибке автодетекции):",
+                    options=mat_options,
+                    index=curr_idx,
+                    key=f"mat_sel_box_{selected_plot_id}",
+                    label_visibility="collapsed",
+                    help="Позволяет инспектору скорректировать материал стен при визуальном аудите",
+                )
+            with col_mat_reset:
+                if is_overridden and st.button(
+                    "Сбросить",
+                    key=f"mat_reset_{selected_plot_id}",
+                    use_container_width=True,
+                ):
+                    del st.session_state["manual_material_overrides"][selected_plot_id]
+                    st.session_state["inspected_plots"].pop(selected_plot_id, None)
+                    st.rerun()
+
+            if chosen_mat_label == "Автоопределение (алгоритм CV)" and is_overridden:
+                del st.session_state["manual_material_overrides"][selected_plot_id]
+                st.session_state["inspected_plots"].pop(selected_plot_id, None)
+                st.rerun()
+            elif chosen_mat_label != "Автоопределение (алгоритм CV)":
+                for wm in WallMaterial:
+                    if wm.value == chosen_mat_label and manual_mat != wm:
+                        st.session_state["manual_material_overrides"][selected_plot_id] = wm
+                        st.rerun()
+
             # 2. Customer Registry Object Data (strictly matching CSV columns)
             _render_html(
                 f"""
@@ -1299,45 +1490,262 @@ def main() -> None:
                         {decision_result.action_required}
                     </div>
                     <div style="font-size:0.82rem; color:#475569;">
-                        <strong>Обоснование решения (АС «Калита» — {decision_result.kalita_status}):</strong>
+                        <strong>Обоснование решения (Статус — {decision_result.kalita_status}):</strong>
                         <ul style="margin:4px 0 0 18px; padding:0;">{steps_html}</ul>
                     </div>
                 </div>
                 """
             )
 
-            # 4. Sber AI Agent (GigaChat-2-Max Vision) Findings
-            if cv_result.operator_notes or cv_result.defects_detected:
-                defects_li = "".join(f"<li>{d}</li>" for d in cv_result.defects_detected)
-                defects_block = (
-                    f'<div style="margin-top:8px; font-size:0.82rem; color:#92400E;">'
-                    f'<strong>Выявленные помехи съемке и замечания ИИ-агента:</strong>'
-                    f'<ul style="margin:4px 0 0 18px; padding:0;">{defects_li}</ul></div>'
-                    if defects_li
-                    else ""
-                )
-                notes_html = (
-                    "<br><br>".join(cv_result.operator_notes)
-                    if isinstance(cv_result.operator_notes, list)
-                    else str(cv_result.operator_notes or "")
-                )
-                _render_html(
-                    f"""
-                    <div class="ws-panel">
-                        <div class="ws-panel-header">
-                            <span>Заключение ИИ-агента Сбербанка (GigaChat-2-Max Vision)</span>
-                            <span>Мультимодальный анализ</span>
-                        </div>
-                        <div style="font-size:0.85rem; color:#1E293B; line-height:1.5;">
-                            {notes_html or "Анализ выполнен в штатном режиме."}
-                        </div>
-                        {defects_block}
+            # 4. Expert AI Agent (GigaChat) Dynamics and Risk Audit
+            dyn_agent_status = "GigaChat (Сбер)" if gigachat_probe.is_online else "Автономный риск-аудит"
+            dyn_agent_badge = "sber-badge-green" if gigachat_probe.is_online else "sber-badge-yellow"
+            defects_li = "".join(f"<li>{d}</li>" for d in cv_result.defects_detected)
+            defects_block = (
+                f'<div style="margin-top:10px; font-size:0.82rem; color:#92400E; background:#FEF3C7; padding:8px 10px; border-radius:6px;">'
+                f'<strong>Выявленные строительные замечания и риски:</strong>'
+                f'<ul style="margin:4px 0 0 16px; padding:0;">{defects_li}</ul></div>'
+                if defects_li
+                else ""
+            )
+            import markdown
+            dyn_summary_html = markdown.markdown(expert_dynamics_summary, extensions=["extra", "nl2br"])
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Экспертный строительный аудит (ИИ-агент GigaChat)</span>
+                        <span class="{dyn_agent_badge}">{dyn_agent_status}</span>
                     </div>
-                    """
-                )
+                    <div style="font-size:0.86rem; color:#1E293B; line-height:1.55;">
+                        {dyn_summary_html}
+                    </div>
+                    {defects_block}
+                </div>
+                """
+            )
 
     # =========================================================================
-    # TAB 2: GEODESY, PPK & ROSREESTR MAP
+    # TAB 2: MULTI-TEMPORAL CONSTRUCTION DYNAMICS & AI AGENT AUDIT
+    # =========================================================================
+    with tab_dynamics:
+        series_sub = (
+            f"{snapshots[0].flight_date} ➔ {snapshots[-1].flight_date}"
+            if len(snapshots) > 1
+            else f"Дата съемки: {snapshots[0].flight_date}"
+        )
+        _render_html(
+            f"""
+            <div class="ws-panel" style="margin-bottom:12px;">
+                <div class="ws-panel-header" style="margin-bottom:0; border-bottom:none; padding-bottom:0;">
+                    <span>Мульти-временной аудит динамики строительства по данным БПЛА</span>
+                    <span>Серий съемки: {len(snapshots)} • {series_sub}</span>
+                </div>
+            </div>
+            """
+        )
+
+        d_k1, d_k2, d_k3, d_k4 = st.columns(4)
+        with d_k1:
+            if len(snapshots) > 1:
+                _render_html(
+                    render_kpi_card(
+                        title="Прирост готовности",
+                        value=f"{'+' if dynamics.delta_readiness_pct > 0 else ''}{dynamics.delta_readiness_pct:.1f}%",
+                        subtext=f"С {snapshots[0].readiness_pct:.0f}% до {snapshots[-1].readiness_pct:.0f}%",
+                        icon_type="chart",
+                        is_success=dynamics.delta_readiness_pct > 0,
+                        is_danger=dynamics.delta_readiness_pct <= 0,
+                    )
+                )
+            else:
+                _render_html(
+                    render_kpi_card(
+                        title="Фактическая готовность",
+                        value=f"{snapshots[0].readiness_pct:.1f}%",
+                        subtext=snapshots[0].stage_title,
+                        icon_type="chart",
+                        is_success=True,
+                    )
+                )
+        with d_k2:
+            if len(snapshots) > 1:
+                _render_html(
+                    render_kpi_card(
+                        title="Интервал наблюдений",
+                        value=f"{dynamics.delta_days} дней",
+                        subtext=f"{snapshots[0].flight_date} → {snapshots[-1].flight_date}",
+                        icon_type="satellite",
+                        is_success=True,
+                    )
+                )
+            else:
+                _render_html(
+                    render_kpi_card(
+                        title="Дата съемки",
+                        value=snapshots[0].flight_date,
+                        subtext="Первичный облет",
+                        icon_type="satellite",
+                        is_success=True,
+                    )
+                )
+        with d_k3:
+            if len(snapshots) > 1:
+                _render_html(
+                    render_kpi_card(
+                        title="Темп строительства",
+                        value=f"{dynamics.pace_pct_per_month:.1f}% / мес",
+                        subtext=dynamics.pace_status,
+                        icon_type="drone",
+                        is_success="Высокий" in dynamics.pace_status or "В графике" in dynamics.pace_status,
+                        is_warning="Умеренный" in dynamics.pace_status,
+                        is_danger="Заморозка" in dynamics.pace_status,
+                    )
+                )
+            else:
+                _render_html(
+                    render_kpi_card(
+                        title="Темп строительства",
+                        value="Первичный облет",
+                        subtext="Ожидает повторной съемки",
+                        icon_type="drone",
+                        is_warning=True,
+                    )
+                )
+        with d_k4:
+            plan_d = credit_obj.planned_completion_date if credit_obj else "Не указан"
+            _render_html(
+                render_kpi_card(
+                    title="Плановый ввод объекта",
+                    value=plan_d,
+                    subtext="Нормативный срок кредита",
+                    icon_type="check_circle",
+                    is_success=True,
+                )
+            )
+
+        t_col_left, t_col_right = st.columns([1.35, 1.0], gap="medium")
+        with t_col_left:
+            table_rows_html = ""
+            for idx, snap in enumerate(snapshots, start=1):
+                f_b = (
+                    '<span class="ws-status-pill ws-status-ok">Да</span>'
+                    if snap.has_foundation
+                    else '<span class="ws-status-pill ws-status-warn">Нет</span>'
+                )
+                w_b = (
+                    '<span class="ws-status-pill ws-status-ok">Да</span>'
+                    if snap.has_walls
+                    else '<span class="ws-status-pill ws-status-warn">Нет</span>'
+                )
+                r_b = (
+                    '<span class="ws-status-pill ws-status-ok">Да</span>'
+                    if snap.has_roof
+                    else '<span class="ws-status-pill ws-status-warn">Нет</span>'
+                )
+                c_b = (
+                    '<span class="ws-status-pill ws-status-ok">Да</span>'
+                    if snap.has_windows_doors
+                    else '<span class="ws-status-pill ws-status-warn">Нет</span>'
+                )
+                table_rows_html += f"""
+                <tr>
+                    <td><strong>Съемка #{idx}</strong> ({snap.flight_date})</td>
+                    <td><strong>{snap.readiness_pct:.1f}%</strong> ({snap.stage_title})</td>
+                    <td>{snap.detected_material.value}</td>
+                    <td>{f_b}</td>
+                    <td>{w_b}</td>
+                    <td>{r_b}</td>
+                    <td>{c_b}</td>
+                </tr>
+                """
+
+            _render_html(
+                f"""
+                <div class="ws-panel">
+                    <div class="ws-panel-header">
+                        <span>Хронология этапов строительства по съемкам с БПЛА</span>
+                        <span>Серий: {len(snapshots)}</span>
+                    </div>
+                    <table class="sber-table-v2">
+                        <thead>
+                            <tr>
+                                <th>Вылет / Дата</th>
+                                <th>Готовность</th>
+                                <th>Материал</th>
+                                <th>Фундамент</th>
+                                <th>Стены</th>
+                                <th>Кровля</th>
+                                <th>Контур</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {table_rows_html}
+                        </tbody>
+                    </table>
+                </div>
+                """
+            )
+
+            items_li = "".join(f"<li>{item}</li>" for item in dynamics.elements_progress)
+            delta_label = (
+                f"Δ готовности: {'+' if dynamics.delta_readiness_pct > 0 else ''}{dynamics.delta_readiness_pct:.1f}%"
+                if len(snapshots) > 1
+                else f"Готовность: {snapshots[0].readiness_pct:.1f}%"
+            )
+            _render_html(
+                f"""
+                <div class="ws-panel" style="margin-top:12px;">
+                    <div class="ws-panel-header">
+                        <span>Зафиксированные строительно-монтажные изменения</span>
+                        <span>{delta_label}</span>
+                    </div>
+                    <ul style="margin:4px 0 0 18px; padding:0; color:#1E293B; font-size:0.86rem; line-height:1.6;">
+                        {items_li}
+                    </ul>
+                </div>
+                """
+            )
+
+        with t_col_right:
+            status_lbl = "GigaChat API Онлайн" if gigachat_probe.is_online else "Автономный шаблонизатор"
+            badge_cls = "sber-badge-green" if gigachat_probe.is_online else "sber-badge-yellow"
+            _render_html(
+                f"""
+                <div class="sber-white-card" style="border-left: 6px solid var(--sber-green); margin-bottom: 14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <strong style="font-size:15px; color:#121922;">
+                            Экспертный анализ динамики ИИ-агентом GigaChat
+                        </strong>
+                        <span class="{badge_cls}">{status_lbl}</span>
+                    </div>
+                    <div style="font-size:13.5px; line-height:1.6; color:#1F2937; white-space:pre-line;
+                                background:#F8FAFC; padding:14px; border-radius:10px; border:1px solid #E2E8F0;">
+                        {dynamics.ai_agent_summary}
+                    </div>
+                </div>
+                """
+            )
+            col_rb1, col_rb2 = st.columns(2)
+            with col_rb1:
+                if st.button(
+                    "🔄 Обновить анализ ИИ",
+                    key=f"refresh_dyn_{selected_plot_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state.pop(dyn_cache_key, None)
+                    st.rerun()
+            with col_rb2:
+                if st.button(
+                    "💾 Сохранить в архив",
+                    key=f"save_dyn_{selected_plot_id}",
+                    use_container_width=True,
+                ):
+                    DynamicsAnalyzer.save_history(selected_plot_id, snapshots[-1])
+                    st.toast("Вылет сохранен в реестр истории инспекций!")
+
+    # =========================================================================
+    # TAB 3: GEODESY, PPK & ROSREESTR MAP
     # =========================================================================
     with tab_geo:
         g_col1, g_col2 = st.columns([1.4, 1.0], gap="medium")
@@ -1426,29 +1834,6 @@ def main() -> None:
     # TAB 3: COLLATERAL INSPECTION ACT (APPENDIX 1) & EXPERT SUMMARY
     # =========================================================================
     with tab_act:
-        gigachat_srv = GigaChatInspectorService(credentials=gigachat_key if gigachat_key else None)
-        ai_summary = gigachat_srv.generate_summary_for_ui(
-            cv_result=cv_result,
-            credit_obj=credit_obj,
-            decision=decision_result,
-            plot_dir=ds.root_dir / selected_plot_id,
-            parcel=parcel,
-        )
-
-        _render_html(
-            f"""
-            <div class="ws-panel">
-                <div class="ws-panel-header">
-                    <span>Экспертное заключение по объекту {cv_result.cadastral_id}</span>
-                    <span>{"GigaChat API Сбер" if gigachat_srv.is_online else "АС «Калита»"}</span>
-                </div>
-                <div style="font-size:0.9rem; color:#1E293B; line-height:1.55;">
-                    {ai_summary}
-                </div>
-            </div>
-            """
-        )
-
         act_photos: list[ReportPhotoItem] = []
         for idx, (p_shot, m_shot) in enumerate(paired_shots[:4], start=1):
             b64_uri = get_base64_image(p_shot, apply_overlay=True, meta=m_shot, parcel=parcel)
@@ -1462,25 +1847,52 @@ def main() -> None:
                     )
                 )
 
+        # Build official Act utilizing superior Expert Dynamics AI Analysis
         act_data = build_act_from_cv(
             cv_result=cv_result,
             credit_obj=credit_obj,
             decision=decision_result,
-            gigachat_summary=ai_summary,
+            gigachat_summary=expert_dynamics_summary,
             photos=act_photos,
         )
         act_gen = ActGenerator()
         html_report = act_gen.render_html(act_data)
+        pdf_report = act_gen.render_pdf(act_data)
 
-        st.download_button(
-            label="Скачать официальный Акт проверки залога (Приложение 1, HTML / Печать в PDF)",
-            data=html_report.encode("utf-8"),
-            file_name=f"Act_Collateral_{selected_plot_id}.html",
-            mime="text/html",
-            type="primary",
-            use_container_width=True,
-            key=f"download_act_{selected_plot_id}",
+        _render_html(
+            f"""
+            <div class="ws-panel">
+                <div class="ws-panel-header">
+                    <span>Экспертный строительный аудит по объекту {cv_result.cadastral_id}</span>
+                    <span>{"GigaChat API Сбер" if gigachat_probe.is_online else "Автономный эксперт"}</span>
+                </div>
+                <div style="font-size:0.9rem; color:#1E293B; line-height:1.55;">
+                    {act_data.recommendation.summary}
+                </div>
+            </div>
+            """
         )
+
+        col_dl_pdf, col_dl_html = st.columns([1.6, 1.0])
+        with col_dl_pdf:
+            st.download_button(
+                label="📥 Скачать официальный Акт проверки залога (PDF)",
+                data=pdf_report,
+                file_name=f"Act_Collateral_{selected_plot_id}.pdf",
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+                key=f"download_act_pdf_{selected_plot_id}",
+            )
+        with col_dl_html:
+            st.download_button(
+                label="📄 Скачать в HTML",
+                data=html_report.encode("utf-8"),
+                file_name=f"Act_Collateral_{selected_plot_id}.html",
+                mime="text/html",
+                use_container_width=True,
+                key=f"download_act_html_{selected_plot_id}",
+            )
 
         components.html(html_report, height=760, scrolling=True)
 

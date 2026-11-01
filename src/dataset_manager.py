@@ -126,6 +126,63 @@ class ParcelManager:
         }
 
     @classmethod
+    def get_plot_flight_dates(cls, plot_id: str, dataset_root: Path | None = None) -> list[str]:
+        """Extract flight / inspection date(s) (DD.MM.YYYY) for a parcel folder."""
+        root = cls.get_dataset_root(dataset_root)
+        plot_dir = root / plot_id
+        if not plot_dir.exists():
+            clean_id = sanitize_plot_id(plot_id)
+            plot_dir = root / clean_id
+        if not plot_dir.exists() or not plot_dir.is_dir():
+            return []
+
+        dates: set[str] = set()
+
+        # 1. Fast regex scan of DJI filenames: DJI_YYYYMMDD...
+        for f in plot_dir.rglob("*"):
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg"):
+                m = re.search(r"DJI_(\d{4})(\d{2})(\d{2})", f.name, re.IGNORECASE)
+                if m:
+                    dates.add(f"{m.group(3)}.{m.group(2)}.{m.group(1)}")
+
+        # 2. Check RINEX PPKOBS header for TIME OF FIRST OBS if no dates found
+        if not dates:
+            for obs in plot_dir.rglob("*.obs"):
+                try:
+                    with open(obs, "r", encoding="utf-8", errors="ignore") as f:
+                        for _ in range(30):
+                            line = f.readline()
+                            if not line:
+                                break
+                            if "TIME OF FIRST OBS" in line:
+                                p = line.split()[:3]
+                                dates.add(f"{int(p[2]):02d}.{int(p[1]):02d}.{p[0]}")
+                                break
+                except Exception:
+                    pass
+
+        # 3. Check EXIF/XMP of first JPG if still no dates found
+        if not dates:
+            jpgs = sorted(
+                f for f in plot_dir.rglob("*")
+                if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")
+            )
+            if jpgs:
+                try:
+                    from PIL import Image
+                    with Image.open(jpgs[0]) as img:
+                        exif = img.getexif()
+                        dt_str = exif.get(306) or exif.get(36867)
+                        if dt_str:
+                            parts = str(dt_str).split()[0].split(":")
+                            if len(parts) >= 3:
+                                dates.add(f"{parts[2]}.{parts[1]}.{parts[0]}")
+                except Exception:
+                    pass
+
+        return sorted(list(dates))
+
+    @classmethod
     def delete_plot(cls, plot_id: str, dataset_root: Path | None = None) -> bool:
         """Safely delete a parcel folder from the dataset root.
 
@@ -175,6 +232,7 @@ class ParcelManager:
         cls,
         plot_id: str,
         files: list[tuple[str, bytes]],
+        flight_subdir: str | None = None,
         dataset_root: Path | None = None,
     ) -> str:
         """Save a list of (filename, bytes) into the specified parcel directory."""
@@ -191,14 +249,20 @@ class ParcelManager:
         except ValueError:
             raise ValueError(f"Security error: target path {target_dir} is outside root {root}")
 
-        target_dir.mkdir(parents=True, exist_ok=True)
+        if flight_subdir:
+            safe_sub = re.sub(r"[^\w\-.]", "_", flight_subdir).strip("._")
+            save_dir = target_dir / safe_sub
+        else:
+            save_dir = target_dir
+
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         for filename, data in files:
             # Strip path components to prevent directory traversal
             safe_name = Path(filename).name
             if not safe_name:
                 continue
-            dest_file = target_dir / safe_name
+            dest_file = save_dir / safe_name
             with open(dest_file, "wb") as f:
                 f.write(data)
 

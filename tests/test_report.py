@@ -103,7 +103,7 @@ def test_act_generator_render_html(sample_credit, sample_inspection):
         strategy=BankStrategy.TRANCHE_APPROVAL,
         decision_code="TRANCHE_APPROVAL_STP",
         risk_level=RiskLevel.LOW,
-        summary="Официальное резюме инспектора для АС «Калита».",
+        summary="Официальное резюме инспектора для залоговой службы.",
         action_items=["Согласовать выплату транша №2"],
     )
     photos = [
@@ -126,13 +126,17 @@ def test_act_generator_render_html(sample_credit, sample_inspection):
     assert "<!DOCTYPE html>" in html
     assert "АКТ ПРОВЕРКИ ИМУЩЕСТВА" in html
     assert "Приложение № 1" in html
-    assert "АС «Калита»" in html
+    assert "АС «Залоги»" in html
     assert "CR-SIB-2026-001" in html
     assert "Сидоров Андрей Владимирович" in html
     assert "65.0%" in html
     assert "Отсутствие консервации оконных проемов" in html
     assert "Северный фасад" in html
     assert "Удовлетворительное" in html
+
+    pdf_bytes = generator.render_pdf(act_data)
+    assert isinstance(pdf_bytes, bytes)
+    assert pdf_bytes.startswith(b"%PDF")
 
 
 def test_act_generator_save_html(sample_credit, sample_inspection, tmp_path):
@@ -218,3 +222,15 @@ def test_build_act_from_cv_schemas():
     html = gen.render_html(act_data)
     assert "АКТ ПРОВЕРКИ ИМУЩЕСТВА" in html
     assert "Экспертное заключение от GigaChat." in html
+
+    # Test markdown conversion and direct PDF rendering
+    act_data_md = build_act_from_cv(
+        cv_result=cv_res,
+        credit_obj=credit,
+        decision=decision,
+        gigachat_summary="### 1. ТЕМПЫ СТРОИТЕЛЬСТВА\n* Прирост готовности +73%",
+    )
+    assert "ТЕМПЫ СТРОИТЕЛЬСТВА" in act_data_md.recommendation.summary
+    pdf_bytes = gen.render_pdf(act_data_md)
+    assert len(pdf_bytes) > 1000
+    assert pdf_bytes.startswith(b"%PDF")

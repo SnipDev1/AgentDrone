@@ -198,6 +198,13 @@ def build_act_from_cv(
         risk_enum = RiskLevel.CRITICAL
 
     final_summary = gigachat_summary or getattr(decision, "action_required", "Официальное экспертное заключение инспектора.")
+    if final_summary and isinstance(final_summary, str):
+        try:
+            import markdown
+            if any(marker in final_summary for marker in ("#", "*", "- ", "\n\n")):
+                final_summary = markdown.markdown(final_summary, extensions=["extra", "nl2br"])
+        except Exception:
+            pass
 
     recommendation = StrategyRecommendation(
         strategy=strat_enum,

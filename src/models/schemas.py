@@ -165,6 +165,7 @@ class CVInspectionResult(BaseModel):
     ppk_summary: PPKTelemetrySummary | None = None
     multispectral: MultispectralAnalysis | None = None
     operator_notes: list[str] = Field(default_factory=list)
+    inspection_date: str | None = Field(default=None, description="Дата проведения съемки (ГГГГ-ММ-ДД)")
 
     @model_validator(mode="before")
     @classmethod

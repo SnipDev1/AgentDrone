@@ -1,4 +1,4 @@
-"""GigaChat API integration service for Siberian Bank AS 'Kalita' reporting.
+"""GigaChat API integration service for Siberian Bank collateral monitoring.
 
 Provides an AI-powered expert inspector summary using Sber GigaChat SDK
 with a deterministic, professional offline fallback generator.
@@ -679,4 +679,101 @@ class GigaChatInspectorService:
             f"Фактическая готовность {readiness_pct:.1f}% подтверждает выполнение контрольного этапа. Несущие стены "
             f"выполнены из проектного материала ({proj_mat}), градостроительные отступы соблюдены, просрочка отсутствует. "
             "Автоматически согласован очередной транш в режиме сквозной обработки STP без созыва кредитного комитета."
+        )
+
+    def analyze_construction_dynamics(
+        self,
+        dynamics: Any,
+        credit: Any = None,
+    ) -> str:
+        """Generate official AI Agent inspector summary on multi-temporal construction dynamics."""
+        from .prompts import SYSTEM_DYNAMICS_PROMPT, build_dynamics_prompt
+
+        if self.is_online and self._client:
+            try:
+                user_content = build_dynamics_prompt(dynamics, credit)
+                response = self._client.chat({
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_DYNAMICS_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 700,
+                })
+                if response and response.choices and len(response.choices) > 0:
+                    text = response.choices[0].message.content.strip()
+                    if text:
+                        return text
+            except Exception as e:
+                logger.warning(f"GigaChat dynamics API call failed: {e}. Generating offline dynamics summary.")
+
+        return self._generate_offline_dynamics_summary(dynamics, credit)
+
+    def _generate_offline_dynamics_summary(self, dynamics: Any, credit: Any = None) -> str:
+        """Deterministic, domain-accurate banking dynamics summary for AS 'Kalita'."""
+        cadastral = getattr(dynamics, "cadastral_id", "54:00:000000:0")
+        delta_pct = getattr(dynamics, "delta_readiness_pct", 0.0)
+        delta_days = getattr(dynamics, "delta_days", 0)
+        pace = getattr(dynamics, "pace_pct_per_month", 0.0)
+        pace_status = getattr(dynamics, "pace_status", "В графике")
+        elements = getattr(dynamics, "elements_progress", [])
+        snapshots = getattr(dynamics, "snapshots", [])
+        planned_date = getattr(credit, "planned_completion_date", "Не указан") if credit else "Не указан"
+
+        d1 = snapshots[0].flight_date if snapshots else "Дата 1"
+        r1 = snapshots[0].readiness_pct if snapshots else 0.0
+        d2 = snapshots[-1].flight_date if len(snapshots) > 1 else d1
+        r2 = snapshots[-1].readiness_pct if len(snapshots) > 1 else r1
+
+        elem_text = "; ".join(elements) if elements else f"Прирост готовности составил +{delta_pct}%"
+
+        header = f"ЭКСПЕРТНОЕ ЗАКЛЮЧЕНИЕ ИИ-ИНСПЕКТОРА ПО ДИНАМИКЕ СТРОИТЕЛЬСТВА ({cadastral}):\n"
+
+        if len(snapshots) < 2:
+            single = snapshots[0] if snapshots else None
+            r_str = f"{single.readiness_pct:.1f}%" if single else "0.0%"
+            st_title = single.stage_title if single else "Стадия 0%"
+            return (
+                f"{header}"
+                f"По объекту проведена первичная аэрофотосъемка с БПЛА от {d1}. "
+                f"Фактическая строительная готовность зафиксирована на уровне {r_str} ({st_title}). "
+                "Сравнительный расчет динамики и темпов СМР (%/мес) будет автоматически сформирован после выполнения "
+                "повторного контрольного облета БПЛА.\n\n"
+                f"С учетом планового срока ввода ({planned_date}) текущий статус принят к мониторингу. "
+                "Рекомендация для залоговой службы: зафиксировать контрольную веху и запланировать повторный облет БПЛА."
+            )
+
+        if delta_pct <= 1.0 and delta_days >= 30:
+            return (
+                f"{header}"
+                f"По результатам сравнительного анализа серий аэрофотосъемки БПЛА от {d1} и {d2} "
+                f"(интервал {delta_days} дн.) на участке зафиксирована стагнация СМР: "
+                f"фактический прирост готовности составил {delta_pct:+.1f}% (готовность остается на уровне {r2:.1f}%). "
+                "Признаки ведения активных строительно-монтажных работ отсутствуют. "
+                f"С учетом планового срока ввода ({planned_date}) формируется критический риск долгостроя и нарушения условий кредитования.\n\n"
+                "Решение для залоговой службы: приостановить согласование траншей, направить заемщику требование "
+                "о предоставлении отчета о расходовании ранее выданных средств и инициировать выездную инспекцию залога."
+            )
+
+        if pace >= 15.0 or delta_pct >= 50.0:
+            return (
+                f"{header}"
+                f"Сравнительный анализ данных БПЛА за период с {d1} по {d2} (интервал {delta_days} дн.) "
+                f"демонстрирует высокую динамику возведения объекта: прирост физической готовности составил +{delta_pct:.1f}% "
+                f"(с {r1:.1f}% до {r2:.1f}%). "
+                f"Зафиксированы ключевые конструктивные изменения: {elem_text}.\n\n"
+                f"Расчетный темп СМР составляет {pace:.1f}% в месяц ({pace_status}), что полностью соответствует графику "
+                f"финансирования с запасом по плановому сроку ввода ({planned_date}). "
+                "Целевое расходование ранее предоставленного кредитного транша подтверждено фотограмметрией. "
+                "Рекомендация для залоговой службы: согласовать выдачу очередного транша в режиме «Зеленый коридор» (STP)."
+            )
+
+        return (
+            f"{header}"
+            f"В результате сопоставления разновременных снимков БПЛА от {d1} и {d2} (прошло {delta_days} дн.) "
+            f"установлена положительная динамика СМР: готовность объекта возросла на +{delta_pct:.1f}% "
+            f"(с {r1:.1f}% до {r2:.1f}%). Выполнены следующие работы: {elem_text}.\n\n"
+            f"Среднемесячный темп строительства зафиксирован на уровне {pace:.1f}%/мес ({pace_status}). "
+            f"Объект возводится в пределах допустимых календарных отклонений относительно планового срока ({planned_date}). "
+            "Рекомендация для залоговой службы: подтвердить целевой статус этапа и продолжить плановый кредитный мониторинг."
         )

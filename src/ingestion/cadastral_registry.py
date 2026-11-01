@@ -404,6 +404,14 @@ class CadastralRegistry:
             if p.raw_folder_name == cleaned:
                 return p
 
+        # Check prefix before underscore or dash (e.g. '5419160202125_2027' -> '5419160202125')
+        prefix = re.split(r"[_\- ]", identifier)[0]
+        if prefix != identifier:
+            pref_cleaned = re.sub(r"[^\d]", "", prefix)
+            for p in cls._CACHE.values():
+                if p.raw_folder_name == pref_cleaned:
+                    return p
+
         if fetch_online:
             fetched = cls.fetch_from_rosreestr_api(norm_id)
             if fetched is not None:

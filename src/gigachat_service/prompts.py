@@ -1,7 +1,7 @@
 """Prompt templates for GigaChat API inspector summary generation.
 
 Formats structured credit and inspection telemetry into prompt payloads
-for the LLM to generate official summaries for AS 'Kalita'.
+for the LLM to generate official summaries for Sberbank collateral monitoring.
 Supports both Banking Domain models and CV Inspection pipeline schemas.
 """
 
@@ -14,8 +14,8 @@ SYSTEM_INSPECTOR_PROMPT = (
     "Вы — главный эксперт Управления мониторинга обеспечения и проблемных активов "
     "Сибирского банка ПАО Сбербанк.\n"
     "Ваша задача — составить официальное, юридически и технически выверенное Экспертное резюме "
-    "инспектора для внесения в АС «Калита» по результатам обследования объекта индивидуального "
-    "жилищного строительства (ИЖС) с использованием БПЛА.\n\n"
+    "инспектора для внесения в кредитное досье залоговой службы Сбербанка по результатам обследования объекта "
+    "индивидуального жилищного строительства (ИЖС) с использованием БПЛА.\n\n"
     "Требования к резюме:\n"
     "1. Деловой, строгий тон банковского отчета.\n"
     "2. Четкая фиксация: статус строительной готовности (0% / 50% / 100%), соответствие проекту "
@@ -147,6 +147,64 @@ def build_inspector_prompt(
     """Build structured user prompt with all domain variables."""
     payload = extract_context_payload(credit, inspection, recommendation)
     return (
-        "Сформируйте официальное Экспертное резюме инспектора для АС «Калита» "
+        "Сформируйте официальное Экспертное резюме инспектора для залоговой службы Сбербанка "
         f"на основе следующих проверенных данных мониторинга:\n\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+SYSTEM_DYNAMICS_PROMPT = (
+    "Вы — ведущий эксперт Управления строительного аудита и залогового мониторинга "
+    "Сибирского банка ПАО Сбербанк.\n"
+    "Ваша задача — подготовить официальное Экспертное заключение ИИ-инспектора по ДИНАМИКЕ СТРОИТЕЛЬСТВА "
+    "объекта ИЖС по результатам повторной аэрофотосъемки БПЛА (разновременной мониторинг) "
+    "для внесения в кредитное досье залоговой службы Сбербанка.\n\n"
+    "Требования к заключению:\n"
+    "1. Строгий деловой тон кредитного отчета Сбербанка.\n"
+    "2. Анализ динамики: прирост готовности в %, интервал в днях, расчетный темп СМР в месяц (%/мес).\n"
+    "3. Детализация фактически возведенных конструкций за отчетный период (нулевой цикл, коробка, кровля, контур).\n"
+    "4. Сопоставление фактических темпов с нормативным графиком кредитования и плановым сроком ввода.\n"
+    "5. Итоговый вывод для кредитного мониторинга Сбербанка: подтверждение целевого расходования предыдущего транша и "
+    "согласование выдачи очередного транша / реструктуризация / проведение очной строительно-технической экспертизы.\n"
+    "6. Объем: 2-3 емких, аргументированных абзаца."
+)
+
+
+def build_dynamics_prompt(dynamics: Any, credit: Any = None) -> str:
+    """Build structured prompt for AI Agent multi-temporal construction dynamics analysis."""
+    snapshots_data = []
+    for s in getattr(dynamics, "snapshots", []):
+        snapshots_data.append({
+            "дата_съемки": s.flight_date,
+            "готовность_процент": s.readiness_pct,
+            "стадия": s.stage_title,
+            "элементы": {
+                "фундамент": s.has_foundation,
+                "стены": s.has_walls,
+                "кровля": s.has_roof,
+                "тепловой_контур": s.has_windows_doors,
+            },
+            "материал": s.detected_material.value if hasattr(s.detected_material, "value") else str(s.detected_material),
+            "количество_кадров": s.shots_count,
+        })
+
+    payload = {
+        "кадастровый_номер": getattr(dynamics, "cadastral_id", "54:00:000000:0"),
+        "заемщик": getattr(credit, "borrower_name", "Заемщик") if credit else "Заемщик",
+        "адрес_объекта": getattr(credit, "address", "Новосибирская область") if credit else "Новосибирская область",
+        "плановый_срок_ввода": getattr(credit, "planned_completion_date", "Не указан") if credit else "Не указан",
+        "дата_начала_стройки": getattr(credit, "construction_start_date", "Не указана") if credit else "Не указана",
+        "хронология_вылетов_бпла": snapshots_data,
+        "метрики_динамики": {
+            "прирост_готовности_процент": getattr(dynamics, "delta_readiness_pct", 0.0),
+            "дней_между_съемками": getattr(dynamics, "delta_days", 0),
+            "темп_смр_в_месяц": getattr(dynamics, "pace_pct_per_month", 0.0),
+            "статус_темпа": getattr(dynamics, "pace_status", "В графике"),
+            "зафиксированные_изменения": getattr(dynamics, "elements_progress", []),
+        },
+    }
+
+    return (
+        "Составьте официальное Экспертное заключение ИИ-инспектора по динамике строительства "
+        "для залоговой службы Сбербанка на основе следующих данных разновременных съемок БПЛА:\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )

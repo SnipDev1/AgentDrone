@@ -14,7 +14,7 @@ Supports both:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Optional
 
 from ..models.credit import CreditObject as BankCreditObject
@@ -49,17 +49,18 @@ class DecisionEngine:
             instance = remaining_args.pop(0)
 
         # 1. Determine if this is a CV-based evaluation (from UI / cv pipeline)
-        if remaining_args and isinstance(remaining_args[0], CVInspectionResult):
-            cv_res = remaining_args[0]
-            credit_o = (
-                remaining_args[1]
-                if len(remaining_args) > 1
-                else (kwargs.get("credit_obj") or kwargs.get("credit_object"))
-            )
-            return cls.evaluate_cv(cv_res, credit_o)
-        elif "cv_result" in kwargs:
-            credit_o = kwargs.get("credit_obj") or kwargs.get("credit_object")
-            return cls.evaluate_cv(kwargs["cv_result"], credit_o)
+        cv_arg: Optional[CVInspectionResult] = None
+        credit_arg: Optional[CVCreditObject] = None
+        for a in remaining_args:
+            if isinstance(a, CVInspectionResult):
+                cv_arg = a
+            elif isinstance(a, CVCreditObject):
+                credit_arg = a
+
+        if cv_arg is not None or "cv_result" in kwargs:
+            res_cv = cv_arg or kwargs["cv_result"]
+            res_cred = credit_arg or kwargs.get("credit_obj") or kwargs.get("credit_object")
+            return cls.evaluate_cv(res_cv, res_cred)
 
         # 2. Domain-based evaluation (CreditObject + InspectionResult)
         credit = remaining_args[0] if remaining_args else kwargs.get("credit")
@@ -84,6 +85,52 @@ class DecisionEngine:
             credit_obj = CVCreditObject(cadastral_id=cv_result.cadastral_id)
         reasons: list[str] = []
 
+        # Determine effective overdue days by comparing inspection flight date to planned completion date
+        def _parse_date_flexible(val: Any) -> Optional[date]:
+            if not val:
+                return None
+            if isinstance(val, date):
+                return val
+            s = str(val).strip()
+            if s.lower() in ("нет", "н/д", "none", "", "не указан"):
+                return None
+            s_clean = s.split()[0]
+            for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y_%m_%d", "%d/%m/%Y"):
+                try:
+                    return datetime.strptime(s_clean, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        insp_date: Optional[date] = None
+        if getattr(cv_result, "inspection_date", None):
+            insp_date = _parse_date_flexible(cv_result.inspection_date)
+        if not insp_date:
+            for sm in getattr(cv_result, "shots_metadata", []):
+                if getattr(sm, "timestamp", None):
+                    insp_date = _parse_date_flexible(sm.timestamp)
+                    if insp_date:
+                        break
+
+        plan_date: Optional[date] = _parse_date_flexible(getattr(credit_obj, "planned_completion_date", None))
+        if not plan_date and hasattr(credit_obj, "cadastral_id"):
+            try:
+                from ..engine.registry import CreditRegistry as JsonCreditRegistry
+                j_reg = JsonCreditRegistry()
+                j_obj = j_reg.get_by_cadastral(credit_obj.cadastral_id)
+                if j_obj and j_obj.construction_deadline:
+                    plan_date = j_obj.construction_deadline
+            except Exception:
+                pass
+
+        flight_days_overdue = 0
+        if insp_date and plan_date:
+            if insp_date > plan_date:
+                flight_days_overdue = (insp_date - plan_date).days
+
+        base_days_overdue = int(getattr(credit_obj, "days_overdue", 0))
+        effective_days_overdue = max(base_days_overdue, flight_days_overdue)
+
         # 1. STOP-FRAUD CHECK (Highest Priority)
         if cv_result.fraud_risk_flag or len(cv_result.fraud_reasons) > 0:
             reasons.extend(cv_result.fraud_reasons)
@@ -105,9 +152,9 @@ class DecisionEngine:
             )
 
         # 2. DEFAULT & FORECLOSURE CHECK
-        if credit_obj.days_overdue > 90 and cv_result.readiness_pct < 25.0:
+        if effective_days_overdue > 90 and cv_result.readiness_pct < 25.0:
             reasons.append(
-                f"Критическая просрочка вехи строительства: {credit_obj.days_overdue} дней"
+                f"Критическая просрочка вехи строительства: {effective_days_overdue} дней"
             )
             reasons.append(
                 f"Фактическая готовность всего {cv_result.readiness_pct:.1f}% при плане сдачи {credit_obj.planned_completion_date}"
@@ -127,7 +174,34 @@ class DecisionEngine:
                 kalita_status="LEGAL_ACTION",
             )
 
-        # 3. 100% COMPLETION & COLLATERAL REGISTRATION
+        # 3. FAIR OVERDUE EVALUATION FOR UNREGISTERED BUILDINGS (Deadline severely breached)
+        is_mortgage_registered = (
+            getattr(credit_obj, "is_registered", "Нет") == "Да"
+            and getattr(credit_obj, "is_pledged", "Нет") == "Да"
+        )
+        if effective_days_overdue > 90 and not is_mortgage_registered:
+            reasons.append(
+                f"Срыв нормативного срока строительства: фактическая просрочка на дату съемки составляет {effective_days_overdue} дн. (план ввода: {credit_obj.planned_completion_date})"
+            )
+            reasons.append(
+                "Постоянный залог (ипотека завершенного жилого дома) в установленный кредитным договором срок не оформлен в ЕГРН"
+            )
+            reasons.append(
+                f"Текущая готовность конструктива {cv_result.readiness_pct:.1f}% ({cv_result.stage_title}), зафиксирован риск долгостроя"
+            )
+            return CVStrategyRecommendation(
+                strategy=StrategyType.RESTRUCTURE_EXTEND,
+                strategy_code="STRAT-02",
+                title="Реструктуризация / Продление срока этапа и урегулирование просрочки ввода",
+                risk_level="MEDIUM",
+                action_required="Вызвать заемщика на комиссию по финансовому оздоровлению. Потребовать предоставления документов о вводе в эксплуатацию и регистрации ипотеки. Согласовать график устранения просрочки.",
+                reasoning=reasons,
+                financial_impact_rub=credit_obj.credit_amount_rub,
+                legal_basis="Внутренний регламент мониторинга строительства Сибирского банка Сбера, ст. 811 ГК РФ",
+                kalita_status="MANUAL_REVIEW",
+            )
+
+        # 4. 100% COMPLETION & COLLATERAL REGISTRATION (Within normal timeline)
         if cv_result.readiness_pct >= 90.0 or cv_result.readiness_stage == 100:
             reasons.append(
                 f"Объект завершен строительством: готовность {cv_result.readiness_pct:.1f}% (Стадия 100%)"
@@ -147,14 +221,14 @@ class DecisionEngine:
                 kalita_status="COLLATERAL_REGISTERED",
             )
 
-        # 4. RESTRUCTURING / TIMELINE EXTENSION
+        # 5. RESTRUCTURING / TIMELINE EXTENSION (Moderate delay or lagging)
         min_required_readiness = 40.0 if credit_obj.tranche_number >= 2 else 0.0
         is_lagging = cv_result.readiness_pct < min_required_readiness
-        has_moderate_overdue = 0 < credit_obj.days_overdue <= 90
+        has_moderate_overdue = 0 < effective_days_overdue <= 90
 
         if has_moderate_overdue or is_lagging:
             if has_moderate_overdue:
-                reasons.append(f"Имеется допустимое отставание от графика: {credit_obj.days_overdue} дн.")
+                reasons.append(f"Имеется допустимое отставание от графика: {effective_days_overdue} дн.")
             if is_lagging:
                 reasons.append(
                     f"Текущая готовность {cv_result.readiness_pct:.1f}% ниже порога транша №{credit_obj.tranche_number} ({min_required_readiness:.0f}%)"
@@ -173,7 +247,7 @@ class DecisionEngine:
                 kalita_status="MANUAL_REVIEW",
             )
 
-        # 5. APPROVE NEXT TRANCHE (Standard positive scenario)
+        # 6. APPROVE NEXT TRANCHE (Standard positive scenario)
         reasons.append(
             f"Готовность объекта {cv_result.readiness_pct:.1f}% (Стадия {cv_result.readiness_stage}%) соответствует графику"
         )
@@ -183,9 +257,9 @@ class DecisionEngine:
         return CVStrategyRecommendation(
             strategy=StrategyType.APPROVE_TRANCHE,
             strategy_code="STRAT-01",
-            title=f"Автоматическое одобрение выдачи транша №{credit_obj.tranche_number} в АС 'Калита'",
+            title=f"Автоматическое одобрение выдачи транша №{credit_obj.tranche_number} (STP Сбербанк)",
             risk_level="LOW",
-            action_required=f"Акцептовать транш №{credit_obj.tranche_number} на сумму {credit_obj.credit_amount_rub * 0.35:,.0f} руб. в АС Калита.",
+            action_required=f"Акцептовать транш №{credit_obj.tranche_number} на сумму {credit_obj.credit_amount_rub * 0.35:,.0f} руб. в системе мониторинга залогов.",
             reasoning=reasons,
             financial_impact_rub=credit_obj.credit_amount_rub * 0.35,
             legal_basis="Кредитный договор, п. 3.2 'Условия выдачи траншей'",
@@ -400,7 +474,7 @@ class DecisionEngine:
                     f"Автоматически согласовать перевод очередного транша №{credit.tranche_number} "
                     f"на сумму {credit.next_tranche_amount:,.2f} руб."
                 ),
-                "Обновить статус объекта в АС «Калита» на 'Зеленый коридор'",
+                "Обновить статус объекта в системе мониторинга залогов на 'Зеленый коридор'",
                 "Запланировать следующий контрольный облет БПЛА через 60 дней",
             ],
             summary=(

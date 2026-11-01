@@ -544,7 +544,7 @@ def render_gigachat_card(
         '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">'
         '<div style="display: flex; align-items: center; gap: 10px;">'
         '<strong style="font-family: var(--sber-font-display); font-size: 16px; color: var(--sber-text-primary);">'
-        'Экспертное заключение ИИ-инспектора GigaChat для АС «Калита»'
+        'Экспертный строительный аудит ИИ-инспектора GigaChat'
         '</strong>'
         '</div>'
         f'<span class="{status_badge_class}">{status_label}</span>'

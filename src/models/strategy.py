@@ -28,7 +28,7 @@ class StrategyRecommendation(BaseModel):
         default_factory=list,
         description="Конкретные предписанные действия для инспектора и кредитора"
     )
-    summary: str = Field(..., description="Экспертное резюме для АС «Калита»")
+    summary: str = Field(..., description="Экспертное резюме для системы мониторинга залогов")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Время принятия решения"
