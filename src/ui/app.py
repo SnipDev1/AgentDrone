@@ -1857,7 +1857,16 @@ def main() -> None:
         )
         act_gen = ActGenerator()
         html_report = act_gen.render_html(act_data)
-        pdf_report = act_gen.render_pdf(act_data)
+        try:
+            if hasattr(act_gen, "render_pdf"):
+                pdf_report = act_gen.render_pdf(act_data)
+            else:
+                pdf_report = ActGenerator.html_to_pdf(html_report, data=act_data)
+        except Exception:
+            try:
+                pdf_report = ActGenerator._render_fallback_pdf(act_data)
+            except Exception:
+                pdf_report = html_report.encode("utf-8")
 
         _render_html(
             f"""
